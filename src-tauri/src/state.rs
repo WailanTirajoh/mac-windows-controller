@@ -18,12 +18,14 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::transfers::{self, TransferView};
 use crate::viewer::ViewerHandle;
 
 pub const EVENT_DEVICES_CHANGED: &str = "devices-changed";
 pub const EVENT_PAIRING_REQUESTED: &str = "pairing-requested";
 pub const EVENT_PAIRING_FINISHED: &str = "pairing-finished";
 pub const EVENT_CONTROLLERS_CHANGED: &str = "controllers-changed";
+pub const EVENT_TRANSFERS_CHANGED: &str = "transfers-changed";
 
 /// Perangkat yang sedang melihat atau mengendalikan layar ini.
 #[derive(Clone, Serialize)]
@@ -45,6 +47,8 @@ pub struct AppState {
     pub viewers: Mutex<HashMap<Fingerprint, ViewerHandle>>,
     /// Perangkat yang sedang mengendalikan perangkat ini.
     pub controllers: Mutex<HashMap<Fingerprint, ControllerView>>,
+    /// Transfer file yang sedang berjalan dan yang sudah selesai, terbaru di akhir.
+    pub transfers: Mutex<Vec<TransferView>>,
     pub accept_incoming: AtomicBool,
     /// `None` hanya di test, yang tidak memakai mDNS.
     _discovery: Option<Discovery>,
@@ -59,6 +63,7 @@ impl AppState {
             peers: Mutex::new(HashMap::new()),
             viewers: Mutex::new(HashMap::new()),
             controllers: Mutex::new(HashMap::new()),
+            transfers: Mutex::new(Vec::new()),
             accept_incoming: AtomicBool::new(true),
             _discovery: discovery,
         }
@@ -97,6 +102,7 @@ fn device_name() -> String {
 /// (misalnya oleh instance lain di mesin yang sama).
 fn start_node(
     data_dir: PathBuf,
+    downloads_dir: PathBuf,
     name: String,
     prefer_default_port: bool,
 ) -> anyhow::Result<(Node, UnboundedReceiver<NodeEvent>)> {
@@ -106,6 +112,7 @@ fn start_node(
         bind_address: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
         otp_policy: OtpPolicy::default(),
         services: SessionServices::default(),
+        downloads_dir: downloads_dir.clone(),
     };
     if prefer_default_port {
         if let Ok(started) = Node::start(config(DEFAULT_PORT)) {
@@ -122,15 +129,22 @@ fn start_node(
 pub fn start(app: &AppHandle) -> anyhow::Result<()> {
     let profile = std::env::var("SAMBUNG_PROFILE").ok().filter(|profile| !profile.is_empty());
     let mut data_dir = app.path().app_data_dir().context("direktori data tidak tersedia")?;
+    // File yang diterima masuk ke subfolder sendiri di folder Downloads.
+    let mut downloads_dir = app
+        .path()
+        .download_dir()
+        .context("folder Downloads tidak tersedia")?
+        .join("Sambung");
     let mut name = device_name();
     if let Some(profile) = &profile {
         data_dir = data_dir.join(format!("profile-{profile}"));
+        downloads_dir = downloads_dir.join(format!("profile-{profile}"));
         name = format!("{name} ({profile})");
     }
 
     // Node dan discovery membuat task tokio, jadi harus dibuat di dalam runtime.
     let (state, node_events, discovery_events) = tauri::async_runtime::block_on(async {
-        let (node, node_events) = start_node(data_dir, name, profile.is_none())?;
+        let (node, node_events) = start_node(data_dir, downloads_dir, name, profile.is_none())?;
         let port = node.local_address()?.port();
         let info = node.info();
         tracing::info!(name = %info.name, id = %info.fingerprint.device_id(), port, "node berjalan");
@@ -194,6 +208,10 @@ async fn forward_node_events(app: AppHandle, mut events: UnboundedReceiver<NodeE
                 tracing::info!(id = %peer.device_id(), "sesi masuk berakhir");
                 app.state::<AppState>().controllers.lock().unwrap().remove(&peer);
                 app.emit(EVENT_CONTROLLERS_CHANGED, ())
+            }
+            NodeEvent::Transfer(event) => {
+                transfers::apply(&mut app.state::<AppState>().transfers.lock().unwrap(), event);
+                app.emit(EVENT_TRANSFERS_CHANGED, ())
             }
         };
         if let Err(error) = sent {

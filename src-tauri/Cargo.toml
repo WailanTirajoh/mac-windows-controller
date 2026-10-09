@@ -15,6 +15,7 @@ gethostname = "1"
 sambung-core = { path = "../crates/core" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["net", "rt", "time"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"

@@ -6,6 +6,7 @@ import {
   type PairingRequest,
   type Permissions,
   type SelfInfo,
+  type Transfer,
   connectAddress,
   connectDevice,
   disconnectDevice,
@@ -15,11 +16,14 @@ import {
   getSelf,
   listControllers,
   listDevices,
+  listTransfers,
   onControllersChanged,
   onDevicesChanged,
   onPairingFinished,
   onPairingRequested,
+  onTransfersChanged,
   openViewer,
+  pickAndSendFiles,
   rejectPairing,
   setAcceptIncoming,
 } from "./api";
@@ -28,6 +32,7 @@ import { PRIMARY_BUTTON } from "./components/Dialog";
 import { EnterCodeDialog } from "./components/EnterCodeDialog";
 import { ControllerBanners, PermissionBanners } from "./components/HostStatus";
 import { ShowCodeDialog } from "./components/ShowCodeDialog";
+import { TransferList } from "./components/TransferList";
 
 /** Kode yang harus diketik di sini, untuk perangkat yang sedang dihubungi. */
 interface OutgoingPairing {
@@ -56,24 +61,28 @@ export function App() {
   const [address, setAddress] = useState("");
   const [controllers, setControllers] = useState<Controller[]>([]);
   const [permissions, setPermissions] = useState<Permissions | null>(null);
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
 
   const refresh = useCallback(() => {
     listDevices().then(setDevices, (error) => setNotice({ kind: "error", text: errorMessage(error) }));
   }, []);
   const refreshControllers = useCallback(() => void listControllers().then(setControllers), []);
   const refreshPermissions = useCallback(() => void getPermissions().then(setPermissions), []);
+  const refreshTransfers = useCallback(() => void listTransfers().then(setTransfers), []);
 
   useEffect(() => {
     getSelf().then(setSelf, (error) => setNotice({ kind: "error", text: errorMessage(error) }));
     refresh();
     refreshControllers();
     refreshPermissions();
+    refreshTransfers();
     // Izin diubah di System Settings, jadi dicek lagi saat jendela ini kembali aktif.
     window.addEventListener("focus", refreshPermissions);
 
     const subscriptions = [
       onDevicesChanged(refresh),
       onControllersChanged(refreshControllers),
+      onTransfersChanged(refreshTransfers),
       onPairingRequested((request) =>
         setIncoming((current) => [
           ...current.filter((item) => item.request.fingerprint !== request.fingerprint),
@@ -88,7 +97,7 @@ export function App() {
       window.removeEventListener("focus", refreshPermissions);
       for (const subscription of subscriptions) void subscription.then((unlisten) => unlisten());
     };
-  }, [refresh, refreshControllers, refreshPermissions]);
+  }, [refresh, refreshControllers, refreshPermissions, refreshTransfers]);
 
   /** Membuka jendela yang menampilkan layar `device`. */
   const view = async (device: Device) => {
@@ -119,6 +128,15 @@ export function App() {
   const connectByAddress = (event: FormEvent) => {
     event.preventDefault();
     if (address.trim() !== "") void connect("address", () => connectAddress(address));
+  };
+
+  const sendFile = async (device: Device) => {
+    setNotice(null);
+    try {
+      await pickAndSendFiles(device.fingerprint);
+    } catch (error) {
+      setNotice({ kind: "error", text: errorMessage(error) });
+    }
   };
 
   const forget = async (device: Device) => {
@@ -188,11 +206,14 @@ export function App() {
                 device={device}
                 busy={connecting === device.fingerprint}
                 onConnect={() => void connect(device.fingerprint, () => connectDevice(device.fingerprint))}
+                onSendFile={() => void sendFile(device)}
                 onForget={() => void forget(device)}
               />
             ))}
           </ul>
         )}
+
+        <TransferList transfers={transfers} />
 
         <form onSubmit={connectByAddress} className="mt-6">
           <label htmlFor="address" className="mb-2 block text-sm font-medium text-neutral-500 dark:text-neutral-400">

@@ -8,7 +8,7 @@ use anyhow::Context;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 
-use super::{DeviceInfo, Inner, NodeEvent, CLOSE_NOT_PAIRED, CLOSE_PROTOCOL, HANDSHAKE_TIMEOUT};
+use super::{DeviceInfo, Inner, NodeEvent, TransferTracker, CLOSE_NOT_PAIRED, CLOSE_PROTOCOL, HANDSHAKE_TIMEOUT};
 use crate::net::Link;
 use crate::pairing::pake::{self, Binding, Confirmations};
 use crate::protocol::{
@@ -16,11 +16,33 @@ use crate::protocol::{
     PROTOCOL_VERSION,
 };
 use crate::session::host::HostSession;
+use crate::transfer;
 
 /// Batas permintaan kualitas video dari pengendali.
 const LONG_EDGE_RANGE: (u32, u32) = (320, 3840);
 const FPS_RANGE: (u32, u32) = (1, 60);
 const BITRATE_RANGE: (u32, u32) = (500_000, 50_000_000);
+
+/// Menerima satu file dari `peer` ke folder unduhan.
+async fn receive_file(inner: Arc<Inner>, peer: DeviceInfo, mut send: quinn::SendStream, mut recv: quinn::RecvStream) {
+    let Ok(offer) = transfer::read_offer(&mut recv).await else {
+        return;
+    };
+    let name = transfer::filename::sanitize(&offer.name);
+    let mut tracker = TransferTracker::start(&inner, peer, name, offer.size, true);
+    let cancel = Arc::clone(&tracker.cancel);
+
+    let outcome = transfer::receive_file(&mut send, &mut recv, &offer, &inner.downloads_dir, &cancel, |received| {
+        tracker.progress(received);
+    })
+    .await;
+    if outcome.is_err() {
+        // Menghentikan pengirim yang masih mengirim, mis. saat dibatalkan di sisi ini.
+        let _ = recv.stop(CLOSE_PROTOCOL.into());
+    }
+    let _ = send.finish();
+    tracker.finish(outcome);
+}
 
 /// Teks berikutnya dari clipboard lokal. Tidak pernah selesai kalau tidak ada sesi.
 async fn next_copied(copied: &mut Option<mpsc::UnboundedReceiver<String>>) -> Option<String> {
@@ -130,8 +152,11 @@ impl Responder {
                     Some(message) => self.on_message(message).await?,
                     None => return Ok(()),
                 },
-                stream = self.link.connection.accept_uni() => self.on_stream(stream?)?,
-                stream = self.link.connection.accept_bi() => self.on_stream(stream?.1)?,
+                stream = self.link.connection.accept_uni() => self.on_stream(None, stream?)?,
+                stream = self.link.connection.accept_bi() => {
+                    let (send, recv) = stream?;
+                    self.on_stream(Some(send), recv)?;
+                }
                 Some(text) = next_copied(&mut self.copied) => {
                     self.reply(ControlMessage::Clipboard { text }).await?;
                 }
@@ -177,17 +202,22 @@ impl Responder {
         }
     }
 
-    /// Stream selain kanal kontrol. Hanya perangkat terpercaya yang boleh membukanya.
-    fn on_stream(&mut self, mut stream: quinn::RecvStream) -> anyhow::Result<()> {
-        if !self.trusted() {
+    /// Stream selain kanal kontrol. Hanya perangkat yang sudah di-pair yang
+    /// boleh membukanya; `send` hanya ada untuk stream dua arah.
+    fn on_stream(&mut self, send: Option<quinn::SendStream>, mut stream: quinn::RecvStream) -> anyhow::Result<()> {
+        if !self.inner.accepts_files_from(&self.peer.fingerprint) {
             self.link.connection.close(CLOSE_NOT_PAIRED.into(), b"not paired");
             anyhow::bail!("perangkat yang belum di-pair membuka stream");
         }
 
+        // Stream input hanya berarti kalau ada sesi, dan sesi hanya dimulai
+        // untuk perangkat yang boleh mengendalikan.
         let input = self.session.as_ref().and_then(HostSession::input_handle);
+        let inner = Arc::clone(&self.inner);
+        let peer = self.peer.clone();
         tokio::spawn(async move {
-            match stream.read_u8().await.ok().and_then(StreamKind::from_byte) {
-                Some(StreamKind::Input) => {
+            match (stream.read_u8().await.ok().and_then(StreamKind::from_byte), send) {
+                (Some(StreamKind::Input), None) => {
                     let Some(input) = input else {
                         return;
                     };
@@ -197,6 +227,7 @@ impl Responder {
                         }
                     }
                 }
+                (Some(StreamKind::File), Some(send)) => receive_file(inner, peer, send, stream).await,
                 _ => {
                     let _ = stream.stop(CLOSE_PROTOCOL.into());
                 }

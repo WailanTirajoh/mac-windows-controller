@@ -1,5 +1,5 @@
 import type { Device, Os } from "../api";
-import { PRIMARY_BUTTON } from "./Dialog";
+import { PRIMARY_BUTTON, SECONDARY_BUTTON } from "./Dialog";
 
 const OS_LABEL: Record<Os, string> = {
   macos: "macOS",
@@ -21,10 +21,11 @@ interface Props {
   device: Device;
   busy: boolean;
   onConnect: () => void;
+  onSendFile: () => void;
   onForget: () => void;
 }
 
-export function DeviceRow({ device, busy, onConnect, onForget }: Props) {
+export function DeviceRow({ device, busy, onConnect, onSendFile, onForget }: Props) {
   const status = [device.paired ? "Tersimpan" : "Belum terhubung", device.online ? "Online" : "Offline"].join(" · ");
 
   return (
@@ -51,6 +52,11 @@ export function DeviceRow({ device, busy, onConnect, onForget }: Props) {
           onClick={onForget}
         >
           Lupakan
+        </button>
+      )}
+      {device.paired && (
+        <button type="button" className={SECONDARY_BUTTON} onClick={onSendFile}>
+          Kirim file
         </button>
       )}
       <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={onConnect}>

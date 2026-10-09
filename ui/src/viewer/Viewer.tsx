@@ -1,7 +1,8 @@
 import { Channel } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
-import { errorMessage } from "../api";
+import { errorMessage, pickAndSendFiles, sendFiles } from "../api";
 import {
   type SessionView,
   onDisplayChanged,
@@ -30,6 +31,7 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
   const [displayId, setDisplayId] = useState<number | null>(null);
   const [swapped, setSwapped] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(true);
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
   // Video: frame dari Rust → decoder → kanvas.
@@ -89,6 +91,20 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
     setSwapped(swapModifiers.current);
   };
 
+  // File yang dijatuhkan ke jendela ini dikirim ke perangkat tujuan.
+  useEffect(() => {
+    const dropping = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop" || event.payload.paths.length === 0) return;
+      sendFiles(fingerprint, event.payload.paths).catch((error) => setFileNotice(errorMessage(error)));
+      setFileNotice(`Mengirim ${event.payload.paths.length} file. Kemajuannya ada di jendela utama.`);
+    });
+    return () => void dropping.then((unlisten) => unlisten());
+  }, [fingerprint]);
+
+  const pickFiles = () => {
+    pickAndSendFiles(fingerprint).catch((error) => setFileNotice(errorMessage(error)));
+  };
+
   const toggleClipboard = () => {
     setClipboardSync(!clipboardSync);
     void viewerSetClipboardSync(fingerprint, !clipboardSync);
@@ -137,6 +153,11 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
             Clipboard
           </button>
         )}
+        {session && (
+          <button type="button" className={TOOLBAR_BUTTON} onClick={pickFiles}>
+            Kirim file
+          </button>
+        )}
         <button type="button" className={TOOLBAR_BUTTON} onClick={() => void toggleFullscreen()}>
           Layar penuh
         </button>
@@ -152,6 +173,15 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
           // Tanpa ini, menyeret di atas kanvas memicu gestur sentuh/seleksi bawaan.
           style={{ touchAction: "none" }}
         />
+        {fileNotice !== null && problem === null && (
+          <button
+            type="button"
+            className="absolute bottom-4 rounded-lg bg-neutral-800/90 px-4 py-2 text-xs text-neutral-100"
+            onClick={() => setFileNotice(null)}
+          >
+            {fileNotice}
+          </button>
+        )}
         {problem !== null && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/80 p-8 text-center">
             <p className="max-w-md text-sm">{problem}</p>

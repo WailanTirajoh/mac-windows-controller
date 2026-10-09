@@ -111,13 +111,12 @@ pub fn open_viewer(app: AppHandle, state: State<'_, AppState>, fingerprint: Stri
         .build()
         .map_err(|error| format!("Gagal membuka jendela: {error}"))?;
 
-    // Menutup jendela mengakhiri sesi dan koneksinya.
+    // Menutup jendela mengakhiri sesi. Koneksinya dibiarkan, supaya file yang
+    // sedang dikirim ke perangkat itu tetap selesai.
     let app = app.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            let state = app.state::<AppState>();
-            state.viewers.lock().unwrap().remove(&fingerprint);
-            state.peers.lock().unwrap().remove(&fingerprint);
+            app.state::<AppState>().viewers.lock().unwrap().remove(&fingerprint);
         }
     });
     Ok(())

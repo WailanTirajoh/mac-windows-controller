@@ -1,6 +1,7 @@
 // Backend tiruan untuk melihat UI di browser biasa: `pnpm dev`, lalu buka
 // http://localhost:1420/?mock. Varian: ?mock=incoming (dialog kode masuk),
-// ?mock=controlled (sedang dikendalikan), ?mock=permissions (izin macOS belum ada).
+// ?mock=controlled (sedang dikendalikan), ?mock=permissions (izin macOS belum ada),
+// ?mock=transfers (daftar transfer file).
 // Kode pairing yang "benar" di mode ini adalah 123456.
 
 import { emit } from "@tauri-apps/api/event";
@@ -75,6 +76,14 @@ export function installMock(): void {
             .filter((item) => item.online || item.paired);
           void emit("devices-changed");
           return null;
+        case "list_transfers":
+          return mode === "transfers"
+            ? [
+                { id: 1, name: "laporan-q3.pdf", size: 2_400_000, transferred: 2_400_000, incoming: true, peerName: "PC-Kantor", status: "done", path: "/Users/x/Downloads/Sambung/laporan-q3.pdf", error: null },
+                { id: 2, name: "video-rapat.mp4", size: 480_000_000, transferred: 139_000_000, incoming: false, peerName: "PC-Kantor", status: "active", path: null, error: null },
+                { id: 3, name: "arsip.zip", size: 90_000_000, transferred: 12_000_000, incoming: false, peerName: "Mac mini", status: "failed", path: null, error: "dibatalkan" },
+              ]
+            : [];
         case "list_controllers":
           return mode === "controlled" ? [{ fingerprint: "b2".repeat(32), name: "PC-Kantor", inputEnabled: true }] : [];
         case "get_permissions":

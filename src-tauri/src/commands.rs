@@ -142,24 +142,31 @@ async fn connect_any(node: &Node, addresses: Vec<SocketAddr>, expected: Fingerpr
     ))
 }
 
+/// Tampilan untuk perangkat tujuan `peer` yang sudah di-pair.
+fn paired_view(state: &AppState, peer: &Peer) -> DeviceView {
+    let fingerprint = peer.info.fingerprint;
+    let online = state.online.lock().unwrap().contains_key(&fingerprint);
+    let allow_incoming = state
+        .node
+        .trusted_devices()
+        .iter()
+        .any(|device| device.fingerprint == fingerprint && device.allow_incoming);
+    DeviceView::new(&peer.info, online, true, allow_incoming)
+}
+
 /// Menyimpan koneksi dan, kalau belum di-pair, meminta perangkat tujuan menampilkan kode.
 async fn finish_connect(state: &AppState, peer: Peer) -> CommandResult<ConnectOutcome> {
     let peer = Arc::new(peer);
     let fingerprint = peer.info.fingerprint;
     state.peers.lock().unwrap().insert(fingerprint, Arc::clone(&peer));
 
-    let online = state.online.lock().unwrap().contains_key(&fingerprint);
     if peer.is_paired() {
-        let allow_incoming = state
-            .node
-            .trusted_devices()
-            .iter()
-            .any(|device| device.fingerprint == fingerprint && device.allow_incoming);
         return Ok(ConnectOutcome::Connected {
-            device: DeviceView::new(&peer.info, online, true, allow_incoming),
+            device: paired_view(state, &peer),
         });
     }
 
+    let online = state.online.lock().unwrap().contains_key(&fingerprint);
     match peer.request_pairing().await {
         Ok(expires_in) => Ok(ConnectOutcome::NeedsCode {
             device: DeviceView::new(&peer.info, online, false, false),
@@ -172,8 +179,26 @@ async fn finish_connect(state: &AppState, peer: Peer) -> CommandResult<ConnectOu
     }
 }
 
+/// Koneksi yang masih hidup ke perangkat yang sudah di-pair, kalau ada.
+fn live_peer(state: &AppState, fingerprint: &Fingerprint) -> Option<Arc<Peer>> {
+    state
+        .peers
+        .lock()
+        .unwrap()
+        .get(fingerprint)
+        .filter(|peer| peer.is_connected() && peer.is_paired())
+        .cloned()
+}
+
 async fn connect_to_device(state: &AppState, fingerprint: &str) -> CommandResult<ConnectOutcome> {
     let fingerprint = parse_fingerprint(fingerprint)?;
+
+    // Memakai ulang koneksi yang ada supaya transfer file yang sedang berjalan tidak terputus.
+    if let Some(peer) = live_peer(state, &fingerprint) {
+        return Ok(ConnectOutcome::Connected {
+            device: paired_view(state, &peer),
+        });
+    }
 
     let mut addresses: Vec<SocketAddr> = state
         .online
@@ -238,6 +263,20 @@ async fn submit_code(state: &AppState, fingerprint: &str, code: &str, allow_reve
     peer.submit_code(&code, allow_reverse)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// Koneksi ke perangkat yang sudah di-pair, dibuka kalau belum ada. Dipakai
+/// untuk hal yang tidak butuh jendela viewer, seperti mengirim file.
+pub async fn ensure_peer(state: &AppState, fingerprint: &str) -> CommandResult<Arc<Peer>> {
+    let not_paired = "Perangkat itu belum terhubung. Hubungkan dulu dengan kode.";
+    match connect_to_device(state, fingerprint).await? {
+        ConnectOutcome::Connected { .. } => live_peer(state, &parse_fingerprint(fingerprint)?).ok_or(not_paired.to_owned()),
+        ConnectOutcome::NeedsCode { device, .. } => {
+            // Kode yang terlanjur diminta dibatalkan dengan menutup koneksinya.
+            state.peers.lock().unwrap().remove(&parse_fingerprint(&device.fingerprint)?);
+            Err(not_paired.to_owned())
+        }
+    }
 }
 
 fn forget(state: &AppState, fingerprint: &str) -> CommandResult<()> {
@@ -360,6 +399,7 @@ mod tests {
                 bind_address: "127.0.0.1:0".parse().unwrap(),
                 otp_policy: OtpPolicy::default(),
                 services: SessionServices::default(),
+                downloads_dir: data.path().join("unduhan"),
             })
             .unwrap();
             let address = node.local_address().unwrap();
@@ -500,6 +540,68 @@ mod tests {
         let mac = TestApp::start("MacBook");
         let error = connect_to_address(&mac.state, "bukan alamat").await.unwrap_err();
         assert_eq!(error, "Alamat \"bukan alamat\" tidak valid.");
+    }
+
+    /// `mac` terhubung ke `pc` dan menyelesaikan pairing.
+    async fn pair(mac: &TestApp, pc: &mut TestApp) {
+        mac.sees(pc, vec![pc.address]);
+        connect_to_device(&mac.state, &pc.fingerprint()).await.unwrap();
+        let code = pc.shown_code().await;
+        submit_code(&mac.state, &pc.fingerprint(), &code, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_can_be_sent_to_a_paired_device_without_an_open_connection() {
+        use sambung_core::node::TransferEvent;
+
+        let mac = TestApp::start("MacBook");
+        let mut pc = TestApp::start("PC");
+        pair(&mac, &mut pc).await;
+        // Seperti setelah aplikasi dibuka ulang: sudah di-pair, belum ada koneksi.
+        mac.state.peers.lock().unwrap().clear();
+        let source = mac._data.path().join("catatan.txt");
+        std::fs::write(&source, b"isi catatan").unwrap();
+
+        let peer = ensure_peer(&mac.state, &pc.fingerprint()).await.unwrap();
+        peer.send_file(source).await.unwrap();
+
+        let saved = loop {
+            let event = tokio::time::timeout(Duration::from_secs(5), pc.events.recv())
+                .await
+                .expect("file tidak sampai")
+                .unwrap();
+            if let NodeEvent::Transfer(TransferEvent::Finished { outcome, .. }) = event {
+                break outcome.unwrap();
+            }
+        };
+        assert_eq!(std::fs::read(saved).unwrap(), b"isi catatan");
+
+        // Koneksi yang masih hidup dipakai ulang, bukan dibuka baru.
+        let again = ensure_peer(&mac.state, &pc.fingerprint()).await.unwrap();
+        assert!(Arc::ptr_eq(&peer, &again));
+    }
+
+    #[tokio::test]
+    async fn sending_to_an_unpaired_device_is_refused_and_leaves_no_code_dialog() {
+        let mac = TestApp::start("MacBook");
+        let mut pc = TestApp::start("PC");
+        mac.sees(&pc, vec![pc.address]);
+
+        let error = ensure_peer(&mac.state, &pc.fingerprint()).await.err().unwrap();
+
+        assert_eq!(error, "Perangkat itu belum terhubung. Hubungkan dulu dengan kode.");
+        assert!(mac.state.peers.lock().unwrap().is_empty());
+        // Dialog kode yang sempat muncul di PC ditutup lagi.
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(5), pc.events.recv())
+                .await
+                .expect("dialog kode tidak ditutup")
+                .unwrap();
+            if let NodeEvent::PairingFinished { paired, .. } = event {
+                assert!(!paired);
+                break;
+            }
+        }
     }
 
     /// Bentuk JSON harus cocok dengan tipe `ConnectOutcome` dan `Device` di `ui/src/api.ts`.

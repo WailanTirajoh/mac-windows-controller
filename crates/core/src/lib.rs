@@ -11,5 +11,6 @@ pub mod node;
 pub mod pairing;
 pub mod protocol;
 pub mod session;
+pub mod transfer;
 pub mod trust;
 pub mod video;

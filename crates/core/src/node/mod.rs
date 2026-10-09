@@ -7,9 +7,9 @@ mod responder;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use serde::Serialize;
@@ -39,6 +39,8 @@ pub struct NodeConfig {
     pub otp_policy: OtpPolicy,
     /// Capture layar dan injeksi input yang dipakai saat perangkat ini dikendalikan.
     pub services: SessionServices,
+    /// Tempat file dari perangkat lain disimpan.
+    pub downloads_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -63,7 +65,27 @@ pub enum NodeEvent {
     /// `peer` mulai melihat (dan, kalau `input_enabled`, mengendalikan) layar ini.
     SessionStarted { peer: DeviceInfo, input_enabled: bool },
     SessionEnded { peer: Fingerprint },
+    Transfer(TransferEvent),
 }
+
+/// Kemajuan satu transfer file, masuk maupun keluar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferEvent {
+    Started {
+        id: u64,
+        peer: DeviceInfo,
+        name: String,
+        size: u64,
+        /// `true` untuk file yang diterima, `false` untuk file yang dikirim.
+        incoming: bool,
+    },
+    Progress { id: u64, transferred: u64 },
+    /// `Ok` berisi path file: hasil simpanan untuk file masuk, sumber untuk file keluar.
+    Finished { id: u64, outcome: Result<PathBuf, String> },
+}
+
+/// Jarak minimum antar laporan kemajuan transfer.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
@@ -98,7 +120,58 @@ struct Inner {
     services: SessionServices,
     /// Koneksi dari perangkat yang sedang mengendalikan perangkat ini.
     controllers: Mutex<HashMap<Fingerprint, quinn::Connection>>,
+    downloads_dir: PathBuf,
+    /// Tanda batal untuk tiap transfer yang sedang berjalan.
+    transfers: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    next_transfer: AtomicU64,
     events: mpsc::UnboundedSender<NodeEvent>,
+}
+
+/// Satu transfer yang sedang berjalan: mengirim event kemajuan dan hasilnya.
+struct TransferTracker {
+    inner: Arc<Inner>,
+    id: u64,
+    cancel: Arc<AtomicBool>,
+    last_progress: Instant,
+}
+
+impl TransferTracker {
+    fn start(inner: &Arc<Inner>, peer: DeviceInfo, name: String, size: u64, incoming: bool) -> Self {
+        let id = inner.next_transfer.fetch_add(1, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        inner.transfers.lock().unwrap().insert(id, Arc::clone(&cancel));
+        inner.emit(NodeEvent::Transfer(TransferEvent::Started {
+            id,
+            peer,
+            name,
+            size,
+            incoming,
+        }));
+        Self {
+            inner: Arc::clone(inner),
+            id,
+            cancel,
+            last_progress: Instant::now(),
+        }
+    }
+
+    fn progress(&mut self, transferred: u64) {
+        if self.last_progress.elapsed() >= PROGRESS_INTERVAL {
+            self.last_progress = Instant::now();
+            self.inner.emit(NodeEvent::Transfer(TransferEvent::Progress {
+                id: self.id,
+                transferred,
+            }));
+        }
+    }
+
+    fn finish(self, outcome: anyhow::Result<PathBuf>) {
+        self.inner.transfers.lock().unwrap().remove(&self.id);
+        self.inner.emit(NodeEvent::Transfer(TransferEvent::Finished {
+            id: self.id,
+            outcome: outcome.map_err(|error| format!("{error:#}")),
+        }));
+    }
 }
 
 impl Inner {
@@ -114,6 +187,12 @@ impl Inner {
             os: Os::current(),
             trusts_peer,
         }
+    }
+
+    /// Apakah `peer` sudah di-pair dan perangkat ini sedang menerima koneksi.
+    /// Cukup untuk mengirim file ke sini; mengendalikan butuh [`Self::allows_incoming`].
+    fn accepts_files_from(&self, peer: &Fingerprint) -> bool {
+        self.accept_incoming.load(Ordering::Relaxed) && self.trust.get(peer).is_some()
     }
 
     /// Apakah `peer` boleh mengendalikan perangkat ini tanpa pairing.
@@ -180,6 +259,9 @@ impl Node {
             accept_incoming: AtomicBool::new(true),
             services: config.services,
             controllers: Mutex::new(HashMap::new()),
+            downloads_dir: config.downloads_dir,
+            transfers: Mutex::new(HashMap::new()),
+            next_transfer: AtomicU64::new(1),
             events,
         });
 
@@ -239,6 +321,13 @@ impl Node {
     pub fn end_incoming_session(&self, peer: &Fingerprint) {
         if let Some(connection) = self.inner.controllers.lock().unwrap().remove(peer) {
             connection.close(CLOSE_NORMAL.into(), b"ended by host");
+        }
+    }
+
+    /// Membatalkan transfer file yang sedang berjalan, masuk maupun keluar.
+    pub fn cancel_transfer(&self, id: u64) {
+        if let Some(cancel) = self.inner.transfers.lock().unwrap().get(&id) {
+            cancel.store(true, Ordering::Relaxed);
         }
     }
 

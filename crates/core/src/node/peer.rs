@@ -2,6 +2,7 @@
 //! sisi pengendali.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +13,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::{
-    ConnectError, DeviceInfo, Inner, PairError, CLOSE_IDENTITY, CLOSE_NORMAL, CLOSE_PROTOCOL, HANDSHAKE_TIMEOUT,
+    ConnectError, DeviceInfo, Inner, PairError, TransferTracker, CLOSE_IDENTITY, CLOSE_NORMAL, CLOSE_PROTOCOL,
+    HANDSHAKE_TIMEOUT,
 };
 use crate::clipboard::ClipboardSync;
 use crate::identity::Fingerprint;
@@ -22,6 +24,7 @@ use crate::protocol::{
     read_message, write_message, ControlMessage, PairFailure, StreamKind, VideoParams, PROTOCOL_VERSION,
 };
 use crate::session::controller::{self, InputSender, SessionEvent, SessionInfo, EVENT_QUEUE};
+use crate::transfer;
 
 /// Batas waktu menunggu balasan. Memulai sesi bisa lama karena perangkat
 /// tujuan harus menyalakan capture layar dulu.
@@ -130,6 +133,11 @@ impl Peer {
             session,
             link,
         })
+    }
+
+    /// `false` kalau koneksi sudah ditutup oleh salah satu sisi atau terputus.
+    pub fn is_connected(&self) -> bool {
+        self.link.connection.close_reason().is_none()
     }
 
     /// `true` kalau kedua perangkat sudah saling menyimpan, jadi tidak perlu OTP.
@@ -266,6 +274,40 @@ impl Peer {
                 Err(error)
             }
         }
+    }
+
+    /// Mulai mengirim file di `path`. Kemajuan dan hasilnya dilaporkan lewat
+    /// `NodeEvent::Transfer` dengan ID yang dikembalikan di sini. Transfer
+    /// terputus kalau koneksi ini ditutup sebelum selesai.
+    pub async fn send_file(&self, path: PathBuf) -> anyhow::Result<u64> {
+        let metadata = tokio::fs::metadata(&path).await.context("file tidak bisa dibaca")?;
+        anyhow::ensure!(metadata.is_file(), "yang bisa dikirim hanya file, bukan folder");
+        let name = path
+            .file_name()
+            .context("path bukan file")?
+            .to_string_lossy()
+            .into_owned();
+
+        let mut tracker = TransferTracker::start(&self.inner, self.info.clone(), name, metadata.len(), false);
+        let id = tracker.id;
+        let connection = self.link.connection.clone();
+        tokio::spawn(async move {
+            let cancel = Arc::clone(&tracker.cancel);
+            let sending = async {
+                let (mut send, mut recv) = connection.open_bi().await?;
+                send.write_u8(StreamKind::File as u8).await?;
+                let sent = transfer::send_file(&mut send, &mut recv, &path, &cancel, |sent| tracker.progress(sent)).await;
+                match &sent {
+                    Ok(()) => drop(send.finish()),
+                    // Membatalkan stream supaya penerima langsung tahu kirimannya gagal.
+                    Err(_) => drop(send.reset(CLOSE_NORMAL.into())),
+                }
+                sent
+            };
+            let outcome = sending.await.map(|()| path.clone());
+            tracker.finish(outcome);
+        });
+        Ok(id)
     }
 
     pub fn close(&self) {

@@ -21,6 +21,8 @@ pub struct TestNode {
     pub node: Node,
     pub events: UnboundedReceiver<NodeEvent>,
     pub address: SocketAddr,
+    /// Folder tempat node ini menyimpan file yang diterima.
+    pub downloads: std::path::PathBuf,
     _data: TempDir,
 }
 
@@ -45,6 +47,7 @@ impl TestNode {
             bind_address: LOCALHOST.parse().unwrap(),
             otp_policy,
             services,
+            downloads_dir: data.path().join("unduhan"),
         })
         .unwrap();
         let address = node.local_address().unwrap();
@@ -52,6 +55,7 @@ impl TestNode {
             node,
             events,
             address,
+            downloads: data.path().join("unduhan"),
             _data: data,
         }
     }

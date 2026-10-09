@@ -5,6 +5,7 @@ mod commands;
 mod permissions;
 mod selftest;
 mod state;
+mod transfers;
 mod viewer;
 mod viewer_frame;
 
@@ -16,6 +17,7 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_self,
             commands::list_devices,
@@ -30,6 +32,11 @@ fn main() {
             commands::end_incoming_session,
             permissions::get_permissions,
             permissions::request_permission,
+            transfers::list_transfers,
+            transfers::send_files,
+            transfers::cancel_transfer,
+            transfers::clear_transfers,
+            transfers::reveal_transfer,
             viewer::open_viewer,
             viewer::viewer_start,
             viewer::viewer_input,

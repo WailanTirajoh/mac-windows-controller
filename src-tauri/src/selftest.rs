@@ -92,6 +92,7 @@ fn start_session(app: &AppHandle) -> anyhow::Result<()> {
             bind_address: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             otp_policy: OtpPolicy::default(),
             services,
+            downloads_dir: data_dir.join(name).join("unduhan"),
         })
     };
 
