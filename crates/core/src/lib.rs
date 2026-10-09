@@ -4,9 +4,11 @@
 pub mod capture;
 pub mod discovery;
 pub mod identity;
+pub mod input;
 pub mod net;
 pub mod node;
 pub mod pairing;
 pub mod protocol;
+pub mod session;
 pub mod trust;
 pub mod video;

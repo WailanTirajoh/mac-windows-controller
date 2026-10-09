@@ -1,5 +1,6 @@
 // Backend tiruan untuk melihat UI di browser biasa: `pnpm dev`, lalu buka
-// http://localhost:1420/?mock (atau ?mock=incoming untuk dialog kode masuk).
+// http://localhost:1420/?mock. Varian: ?mock=incoming (dialog kode masuk),
+// ?mock=controlled (sedang dikendalikan), ?mock=permissions (izin macOS belum ada).
 // Kode pairing yang "benar" di mode ini adalah 123456.
 
 import { emit } from "@tauri-apps/api/event";
@@ -35,6 +36,7 @@ let attemptsLeft = 3;
 const find = (fingerprint: unknown) => devices.find((item) => item.fingerprint === fingerprint);
 
 export function installMock(): void {
+  const mode = new URLSearchParams(window.location.search).get("mock");
   mockWindows("main");
   mockIPC(
     (command, payload) => {
@@ -73,6 +75,12 @@ export function installMock(): void {
             .filter((item) => item.online || item.paired);
           void emit("devices-changed");
           return null;
+        case "list_controllers":
+          return mode === "controlled" ? [{ fingerprint: "b2".repeat(32), name: "PC-Kantor", inputEnabled: true }] : [];
+        case "get_permissions":
+          return { screenRecording: mode !== "permissions", accessibility: mode !== "permissions" };
+        case "open_viewer":
+          throw "Jendela viewer hanya ada di aplikasi sungguhan.";
         case "reject_pairing":
           void emit("pairing-finished", { fingerprint: args.fingerprint, paired: false });
           return null;
@@ -83,7 +91,7 @@ export function installMock(): void {
     { shouldMockEvents: true },
   );
 
-  if (new URLSearchParams(window.location.search).get("mock") === "incoming") {
+  if (mode === "incoming") {
     const request: PairingRequest = {
       fingerprint: "e5".repeat(32),
       name: "DESKTOP-RUMAH",

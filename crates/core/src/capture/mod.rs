@@ -1,5 +1,7 @@
 //! Capture layar. Tiap OS punya implementasi sendiri di balik API yang sama.
 
+pub mod synthetic;
+
 use crate::video::I420Frame;
 
 #[cfg(target_os = "macos")]
@@ -52,4 +54,24 @@ pub fn list_displays() -> anyhow::Result<Vec<DisplayInfo>> {
 
 pub fn start_capture(config: CaptureConfig, sink: FrameSink) -> anyhow::Result<Box<dyn ScreenCapturer>> {
     platform::start_capture(config, sink)
+}
+
+/// Sumber daftar monitor dan frame untuk sesi. Aplikasi memakai
+/// [`SystemCapture`]; test memakai sumber sintetis.
+pub trait CaptureBackend: Send + Sync {
+    fn displays(&self) -> anyhow::Result<Vec<DisplayInfo>>;
+    fn start(&self, config: CaptureConfig, sink: FrameSink) -> anyhow::Result<Box<dyn ScreenCapturer>>;
+}
+
+/// Capture layar sungguhan lewat API OS.
+pub struct SystemCapture;
+
+impl CaptureBackend for SystemCapture {
+    fn displays(&self) -> anyhow::Result<Vec<DisplayInfo>> {
+        list_displays()
+    }
+
+    fn start(&self, config: CaptureConfig, sink: FrameSink) -> anyhow::Result<Box<dyn ScreenCapturer>> {
+        start_capture(config, sink)
+    }
 }

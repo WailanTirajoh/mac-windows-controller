@@ -111,3 +111,60 @@ export async function runSelftest(canvas: HTMLCanvasElement): Promise<void> {
   }
   await report();
 }
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** Jumlah nilai piksel di satu baris kanvas; berubah kalau gambar bergerak. */
+function rowChecksum(canvas: HTMLCanvasElement): number {
+  const context = canvas.getContext("2d");
+  if (context === null || canvas.width === 0) return 0;
+  const { data } = context.getImageData(0, Math.floor(canvas.height / 2), Math.min(canvas.width, 256), 1);
+  return data.reduce((sum, value) => sum + value, 0);
+}
+
+/**
+ * Uji mandiri sesi: mengamati jendela viewer sungguhan yang terhubung ke node
+ * tujuan bersumber layar sintetis. Memeriksa bahwa video tampil dan bergerak,
+ * lalu mengirim event mouse dan keyboard buatan lewat kanvas.
+ */
+export async function runSessionSelftest(): Promise<void> {
+  const errors: string[] = [];
+  const canvas = await (async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const found = document.querySelector("canvas");
+      // Lebar bawaan kanvas kosong adalah 300; lebih dari itu berarti frame sudah digambar.
+      if (found !== null && found.width > 300) return found;
+      await wait(100);
+    }
+    return null;
+  })();
+
+  if (canvas === null) {
+    errors.push("tidak ada frame yang tampil dalam 10 detik");
+    await invoke("selftest_report", { report: JSON.stringify({ errors, page: document.body.innerText }) });
+    return;
+  }
+
+  const before = rowChecksum(canvas);
+  await wait(500);
+  const moving = rowChecksum(canvas) !== before;
+
+  // Event buatan lewat elemen yang sama dengan yang dipakai pengguna.
+  const rect = canvas.getBoundingClientRect();
+  const at = { clientX: rect.left + rect.width / 4, clientY: rect.top + rect.height / 2, bubbles: true };
+  canvas.dispatchEvent(new PointerEvent("pointermove", at));
+  await wait(50);
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyA", bubbles: true }));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyA", bubbles: true }));
+  await wait(400);
+
+  await invoke("selftest_report", {
+    report: JSON.stringify({
+      size: `${canvas.width}x${canvas.height}`,
+      luma: lumaRange(canvas),
+      moving,
+      toolbar: document.querySelector("header")?.textContent ?? "",
+      errors,
+    }),
+  });
+}

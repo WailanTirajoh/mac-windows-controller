@@ -1,4 +1,4 @@
-//! Keadaan aplikasi: node, discovery, dan koneksi keluar yang sedang terbuka.
+//! Keadaan aplikasi: node, discovery, koneksi keluar, dan sesi yang berjalan.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -12,13 +12,27 @@ use sambung_core::identity::Fingerprint;
 use sambung_core::node::{Node, NodeConfig, NodeEvent, Peer};
 use sambung_core::pairing::otp::OtpPolicy;
 use sambung_core::protocol::DEFAULT_PORT;
+use sambung_core::session::SessionServices;
+use sambung_core::trust::Os;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::viewer::ViewerHandle;
+
 pub const EVENT_DEVICES_CHANGED: &str = "devices-changed";
 pub const EVENT_PAIRING_REQUESTED: &str = "pairing-requested";
 pub const EVENT_PAIRING_FINISHED: &str = "pairing-finished";
+pub const EVENT_CONTROLLERS_CHANGED: &str = "controllers-changed";
+
+/// Perangkat yang sedang melihat atau mengendalikan layar ini.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerView {
+    pub fingerprint: String,
+    pub name: String,
+    pub input_enabled: bool,
+}
 
 pub struct AppState {
     pub node: Node,
@@ -27,6 +41,10 @@ pub struct AppState {
     pub online: Mutex<HashMap<Fingerprint, DiscoveredDevice>>,
     /// Koneksi keluar yang sedang terbuka, per perangkat tujuan.
     pub peers: Mutex<HashMap<Fingerprint, Arc<Peer>>>,
+    /// Sesi yang sedang ditampilkan di jendela viewer, per perangkat tujuan.
+    pub viewers: Mutex<HashMap<Fingerprint, ViewerHandle>>,
+    /// Perangkat yang sedang mengendalikan perangkat ini.
+    pub controllers: Mutex<HashMap<Fingerprint, ControllerView>>,
     pub accept_incoming: AtomicBool,
     /// `None` hanya di test, yang tidak memakai mDNS.
     _discovery: Option<Discovery>,
@@ -39,6 +57,8 @@ impl AppState {
             port,
             online: Mutex::new(HashMap::new()),
             peers: Mutex::new(HashMap::new()),
+            viewers: Mutex::new(HashMap::new()),
+            controllers: Mutex::new(HashMap::new()),
             accept_incoming: AtomicBool::new(true),
             _discovery: discovery,
         }
@@ -50,7 +70,7 @@ impl AppState {
 struct PairingRequested {
     fingerprint: String,
     name: String,
-    os: sambung_core::trust::Os,
+    os: Os,
     code: String,
     expires_in_secs: u64,
 }
@@ -85,6 +105,7 @@ fn start_node(
         device_name: name.clone(),
         bind_address: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
         otp_policy: OtpPolicy::default(),
+        services: SessionServices::default(),
     };
     if prefer_default_port {
         if let Ok(started) = Node::start(config(DEFAULT_PORT)) {
@@ -124,16 +145,20 @@ pub fn start(app: &AppHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Membawa jendela utama ke depan, untuk hal yang harus dilihat pengguna.
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 async fn forward_node_events(app: AppHandle, mut events: UnboundedReceiver<NodeEvent>) {
     while let Some(event) = events.recv().await {
         let sent = match event {
             NodeEvent::PairingRequested { peer, code, expires_in } => {
-                // Kode harus terlihat, jadi jendela utama dibawa ke depan.
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window(&app);
                 app.emit(
                     EVENT_PAIRING_REQUESTED,
                     PairingRequested {
@@ -153,6 +178,23 @@ async fn forward_node_events(app: AppHandle, mut events: UnboundedReceiver<NodeE
                 },
             ),
             NodeEvent::TrustChanged => app.emit(EVENT_DEVICES_CHANGED, ()),
+            NodeEvent::SessionStarted { peer, input_enabled } => {
+                tracing::info!(name = %peer.name, input_enabled, "sesi masuk dimulai");
+                app.state::<AppState>().controllers.lock().unwrap().insert(
+                    peer.fingerprint,
+                    ControllerView {
+                        fingerprint: peer.fingerprint.to_string(),
+                        name: peer.name,
+                        input_enabled,
+                    },
+                );
+                app.emit(EVENT_CONTROLLERS_CHANGED, ())
+            }
+            NodeEvent::SessionEnded { peer } => {
+                tracing::info!(id = %peer.device_id(), "sesi masuk berakhir");
+                app.state::<AppState>().controllers.lock().unwrap().remove(&peer);
+                app.emit(EVENT_CONTROLLERS_CHANGED, ())
+            }
         };
         if let Err(error) = sent {
             tracing::warn!("gagal mengirim event ke UI: {error}");

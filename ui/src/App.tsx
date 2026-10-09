@@ -1,25 +1,32 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   type ConnectOutcome,
+  type Controller,
   type Device,
   type PairingRequest,
+  type Permissions,
   type SelfInfo,
   connectAddress,
   connectDevice,
   disconnectDevice,
   errorMessage,
   forgetDevice,
+  getPermissions,
   getSelf,
+  listControllers,
   listDevices,
+  onControllersChanged,
   onDevicesChanged,
   onPairingFinished,
   onPairingRequested,
+  openViewer,
   rejectPairing,
   setAcceptIncoming,
 } from "./api";
 import { DeviceRow } from "./components/DeviceRow";
 import { PRIMARY_BUTTON } from "./components/Dialog";
 import { EnterCodeDialog } from "./components/EnterCodeDialog";
+import { ControllerBanners, PermissionBanners } from "./components/HostStatus";
 import { ShowCodeDialog } from "./components/ShowCodeDialog";
 
 /** Kode yang harus diketik di sini, untuk perangkat yang sedang dihubungi. */
@@ -47,17 +54,26 @@ export function App() {
   const [incoming, setIncoming] = useState<IncomingPairing[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [address, setAddress] = useState("");
+  const [controllers, setControllers] = useState<Controller[]>([]);
+  const [permissions, setPermissions] = useState<Permissions | null>(null);
 
   const refresh = useCallback(() => {
     listDevices().then(setDevices, (error) => setNotice({ kind: "error", text: errorMessage(error) }));
   }, []);
+  const refreshControllers = useCallback(() => void listControllers().then(setControllers), []);
+  const refreshPermissions = useCallback(() => void getPermissions().then(setPermissions), []);
 
   useEffect(() => {
     getSelf().then(setSelf, (error) => setNotice({ kind: "error", text: errorMessage(error) }));
     refresh();
+    refreshControllers();
+    refreshPermissions();
+    // Izin diubah di System Settings, jadi dicek lagi saat jendela ini kembali aktif.
+    window.addEventListener("focus", refreshPermissions);
 
     const subscriptions = [
       onDevicesChanged(refresh),
+      onControllersChanged(refreshControllers),
       onPairingRequested((request) =>
         setIncoming((current) => [
           ...current.filter((item) => item.request.fingerprint !== request.fingerprint),
@@ -69,15 +85,17 @@ export function App() {
       ),
     ];
     return () => {
+      window.removeEventListener("focus", refreshPermissions);
       for (const subscription of subscriptions) void subscription.then((unlisten) => unlisten());
     };
-  }, [refresh]);
+  }, [refresh, refreshControllers, refreshPermissions]);
 
-  const handleOutcome = (outcome: ConnectOutcome) => {
-    if (outcome.status === "needs_code") {
-      setOutgoing({ device: outcome.device, expiresAt: Date.now() + outcome.expiresInSecs * 1000 });
-    } else {
-      setNotice({ kind: "info", text: `Terhubung ke ${outcome.device.name}.` });
+  /** Membuka jendela yang menampilkan layar `device`. */
+  const view = async (device: Device) => {
+    try {
+      await openViewer(device.fingerprint);
+    } catch (error) {
+      setNotice({ kind: "error", text: errorMessage(error) });
     }
   };
 
@@ -85,7 +103,12 @@ export function App() {
     setConnecting(key);
     setNotice(null);
     try {
-      handleOutcome(await start());
+      const outcome = await start();
+      if (outcome.status === "needs_code") {
+        setOutgoing({ device: outcome.device, expiresAt: Date.now() + outcome.expiresInSecs * 1000 });
+      } else {
+        await view(outcome.device);
+      }
     } catch (error) {
       setNotice({ kind: "error", text: errorMessage(error) });
     } finally {
@@ -135,6 +158,8 @@ export function App() {
       </header>
 
       <main className="flex-1 overflow-y-auto px-6 py-5">
+        <ControllerBanners controllers={controllers} />
+        {permissions && <PermissionBanners permissions={permissions} onRecheck={refreshPermissions} />}
         {notice && (
           <p
             role={notice.kind === "error" ? "alert" : "status"}
@@ -194,8 +219,8 @@ export function App() {
           device={outgoing.device}
           expiresAt={outgoing.expiresAt}
           onPaired={() => {
-            setNotice({ kind: "info", text: `${outgoing.device.name} tersimpan dan terhubung.` });
             setOutgoing(null);
+            void view(outgoing.device);
           }}
           onCancel={() => {
             void disconnectDevice(outgoing.device.fingerprint);

@@ -1,89 +1,23 @@
 //! Pairing dan kepercayaan antar dua node sungguhan di localhost.
 
+mod common;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use common::{pair, TestNode, LOCALHOST, WAIT};
 use sambung_core::identity::Identity;
 use sambung_core::net::{self, Link};
-use sambung_core::node::{ConnectError, Node, NodeConfig, NodeEvent, PairError, Peer};
+use sambung_core::node::{ConnectError, PairError};
 use sambung_core::pairing::otp::OtpPolicy;
 use sambung_core::protocol::{read_message, write_message, ControlMessage, PairFailure, StreamKind, PROTOCOL_VERSION};
+use sambung_core::session::SessionServices;
 use sambung_core::trust::Os;
-use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::UnboundedReceiver;
-
-const LOCALHOST: &str = "127.0.0.1:0";
-const WAIT: Duration = Duration::from_secs(5);
-
-struct TestNode {
-    node: Node,
-    events: UnboundedReceiver<NodeEvent>,
-    address: SocketAddr,
-    _data: TempDir,
-}
-
-impl TestNode {
-    fn start(name: &str) -> Self {
-        Self::start_with(name, OtpPolicy::default())
-    }
-
-    fn start_with(name: &str, otp_policy: OtpPolicy) -> Self {
-        let data = TempDir::new().unwrap();
-        let (node, events) = Node::start(NodeConfig {
-            data_dir: data.path().to_owned(),
-            device_name: name.to_owned(),
-            bind_address: LOCALHOST.parse().unwrap(),
-            otp_policy,
-        })
-        .unwrap();
-        let address = node.local_address().unwrap();
-        Self {
-            node,
-            events,
-            address,
-            _data: data,
-        }
-    }
-
-    async fn next_event(&mut self) -> NodeEvent {
-        tokio::time::timeout(WAIT, self.events.recv())
-            .await
-            .expect("event tidak datang")
-            .expect("node sudah berhenti")
-    }
-
-    /// Menunggu dialog OTP muncul dan mengembalikan kodenya.
-    async fn shown_code(&mut self) -> String {
-        loop {
-            if let NodeEvent::PairingRequested { code, .. } = self.next_event().await {
-                return code;
-            }
-        }
-    }
-
-    /// Menunggu dialog OTP ditutup dan mengembalikan apakah pairing berhasil.
-    async fn dialog_result(&mut self) -> bool {
-        loop {
-            if let NodeEvent::PairingFinished { paired, .. } = self.next_event().await {
-                return paired;
-            }
-        }
-    }
-}
 
 /// Kode yang pasti berbeda dari `code`.
 fn wrong(code: &str) -> String {
     format!("{:06}", (code.parse::<u32>().unwrap() + 1) % 1_000_000)
-}
-
-/// `a` terhubung ke `b` dan menyelesaikan pairing dengan kode yang benar.
-async fn pair(a: &TestNode, b: &mut TestNode) -> Peer {
-    let peer = a.node.connect(b.address, None).await.unwrap();
-    peer.request_pairing().await.unwrap();
-    let code = b.shown_code().await;
-    peer.submit_code(&code, true).await.unwrap();
-    peer
 }
 
 fn rejected(result: Result<(), PairError>) -> PairFailure {
@@ -215,6 +149,7 @@ async fn expired_code_is_rejected() {
             ttl: Duration::from_millis(50),
             ..OtpPolicy::default()
         },
+        SessionServices::default(),
     );
     let peer = a.node.connect(b.address, None).await.unwrap();
     peer.request_pairing().await.unwrap();

@@ -1,17 +1,20 @@
 import { StrictMode, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import "../styles.css";
-import { runSelftest } from "./selftest";
+import { runSelftest, runSessionSelftest } from "./selftest";
+import { Viewer } from "./Viewer";
 
-const selftest = new URLSearchParams(window.location.search).has("selftest");
+const params = new URLSearchParams(window.location.search);
+const selftest = params.get("selftest");
 
-function Viewer() {
+/** Halaman uji mandiri video (`?selftest=video`): hanya kanvas, tanpa sesi. */
+function Selftest() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const started = useRef(false);
 
   useEffect(() => {
     // StrictMode menjalankan efek dua kali saat development.
-    if (!selftest || started.current || canvas.current === null) return;
+    if (started.current || canvas.current === null) return;
     started.current = true;
     void runSelftest(canvas.current);
   }, []);
@@ -24,7 +27,8 @@ function Viewer() {
 }
 
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <Viewer />
-  </StrictMode>,
+  <StrictMode>{selftest === "video" ? <Selftest /> : <Viewer fingerprint={params.get("peer") ?? ""} />}</StrictMode>,
 );
+
+// `?selftest=session`: viewer berjalan seperti biasa, lalu diamati dari luar.
+if (selftest === "session") void runSessionSelftest();

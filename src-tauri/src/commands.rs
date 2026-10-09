@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::State;
 use tokio::task::JoinSet;
 
-use crate::state::AppState;
+use crate::state::{AppState, ControllerView};
 
 /// Batas waktu mencoba satu alamat.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
@@ -242,6 +242,7 @@ async fn submit_code(state: &AppState, fingerprint: &str, code: &str, allow_reve
 
 fn forget(state: &AppState, fingerprint: &str) -> CommandResult<()> {
     let fingerprint = parse_fingerprint(fingerprint)?;
+    state.viewers.lock().unwrap().remove(&fingerprint);
     state.peers.lock().unwrap().remove(&fingerprint);
     state
         .node
@@ -310,10 +311,26 @@ pub fn reject_pairing(state: State<'_, AppState>, fingerprint: String) -> Comman
     Ok(())
 }
 
+/// Mematikannya juga memutus perangkat yang sedang mengendalikan perangkat ini.
 #[tauri::command]
 pub fn set_accept_incoming(state: State<'_, AppState>, accept: bool) {
     state.accept_incoming.store(accept, Ordering::Relaxed);
     state.node.set_accept_incoming(accept);
+}
+
+/// Perangkat yang sedang melihat atau mengendalikan layar ini.
+#[tauri::command]
+pub fn list_controllers(state: State<'_, AppState>) -> Vec<ControllerView> {
+    let mut controllers: Vec<ControllerView> = state.controllers.lock().unwrap().values().cloned().collect();
+    controllers.sort_by(|a, b| a.name.cmp(&b.name));
+    controllers
+}
+
+/// Memutus perangkat yang sedang mengendalikan perangkat ini.
+#[tauri::command]
+pub fn end_incoming_session(state: State<'_, AppState>, fingerprint: String) -> CommandResult<()> {
+    state.node.end_incoming_session(&parse_fingerprint(&fingerprint)?);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -321,6 +338,7 @@ mod tests {
     use sambung_core::discovery::DiscoveredDevice;
     use sambung_core::node::{NodeConfig, NodeEvent};
     use sambung_core::pairing::otp::OtpPolicy;
+    use sambung_core::session::SessionServices;
     use tempfile::TempDir;
     use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -341,6 +359,7 @@ mod tests {
                 device_name: name.to_owned(),
                 bind_address: "127.0.0.1:0".parse().unwrap(),
                 otp_policy: OtpPolicy::default(),
+                services: SessionServices::default(),
             })
             .unwrap();
             let address = node.local_address().unwrap();

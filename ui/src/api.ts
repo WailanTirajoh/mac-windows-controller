@@ -43,6 +43,21 @@ export interface PairingFinished {
   paired: boolean;
 }
 
+/** Perangkat yang sedang melihat atau mengendalikan layar ini. */
+export interface Controller {
+  fingerprint: string;
+  name: string;
+  inputEnabled: boolean;
+}
+
+/** Izin OS yang dibutuhkan supaya perangkat ini bisa dikendalikan (hanya relevan di macOS). */
+export interface Permissions {
+  screenRecording: boolean;
+  accessibility: boolean;
+}
+
+export type PermissionKind = "screen_recording" | "accessibility";
+
 export const getSelf = () => invoke<SelfInfo>("get_self");
 export const listDevices = () => invoke<Device[]>("list_devices");
 export const connectDevice = (fingerprint: string) => invoke<ConnectOutcome>("connect_device", { fingerprint });
@@ -53,8 +68,15 @@ export const disconnectDevice = (fingerprint: string) => invoke<void>("disconnec
 export const forgetDevice = (fingerprint: string) => invoke<void>("forget_device", { fingerprint });
 export const rejectPairing = (fingerprint: string) => invoke<void>("reject_pairing", { fingerprint });
 export const setAcceptIncoming = (accept: boolean) => invoke<void>("set_accept_incoming", { accept });
+export const openViewer = (fingerprint: string) => invoke<void>("open_viewer", { fingerprint });
+export const listControllers = () => invoke<Controller[]>("list_controllers");
+export const endIncomingSession = (fingerprint: string) => invoke<void>("end_incoming_session", { fingerprint });
+export const getPermissions = () => invoke<Permissions>("get_permissions");
+export const requestPermission = (kind: PermissionKind) => invoke<void>("request_permission", { kind });
 
 export const onDevicesChanged = (handler: () => void): Promise<UnlistenFn> => listen("devices-changed", handler);
+export const onControllersChanged = (handler: () => void): Promise<UnlistenFn> =>
+  listen("controllers-changed", handler);
 export const onPairingRequested = (handler: (request: PairingRequest) => void): Promise<UnlistenFn> =>
   listen<PairingRequest>("pairing-requested", (event) => handler(event.payload));
 export const onPairingFinished = (handler: (result: PairingFinished) => void): Promise<UnlistenFn> =>
