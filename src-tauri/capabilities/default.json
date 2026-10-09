@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Izin dasar untuk jendela utama dan jendela viewer.",
+  "windows": ["main", "viewer-*"],
+  "permissions": ["core:default"]
+}

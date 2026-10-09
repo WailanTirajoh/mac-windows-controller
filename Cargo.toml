@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,8 +8,11 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/WailanTirajoh/mac-windows-controller"
 
-[profile.dev.package."*"]
 # Encoder dan konversi warna terlalu lambat tanpa optimasi, bahkan saat debug.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.sambung-core]
 opt-level = 3
 
 [profile.release]

@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  /* Aplikasi desktop: teks tidak ikut terseleksi saat klik-seret. */
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}

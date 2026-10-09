@@ -1,0 +1,15 @@
+[package]
+name = "sambung"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Remote desktop Mac dan Windows lewat jaringan lokal."
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+anyhow = "1"
+sambung-core = { path = "../crates/core" }
+tauri = { version = "2.12", features = [] }

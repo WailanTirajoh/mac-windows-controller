@@ -4,6 +4,7 @@ pub mod convert;
 pub mod frame;
 pub mod openh264_enc;
 pub mod pacing;
+pub mod testsrc;
 
 pub use frame::{fit_even, EncodedFrame, I420Frame};
 

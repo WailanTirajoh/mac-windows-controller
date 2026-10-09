@@ -4,22 +4,14 @@
 use openh264::decoder::Decoder;
 use openh264::formats::YUVSource;
 use sambung_core::video::openh264_enc::OpenH264Encoder;
+use sambung_core::video::testsrc::scrolling_document;
 use sambung_core::video::{EncoderSettings, I420Frame, VideoEncoder};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 
-/// Gambar bergaris yang bergeser tiap frame, mirip teks yang di-scroll.
 fn synthetic_frame(index: u32) -> I420Frame {
-    let mut frame = I420Frame::new(WIDTH, HEIGHT, u64::from(index) * 16_667);
-    for (row, line) in frame.y.chunks_exact_mut(WIDTH as usize).enumerate() {
-        for (col, pixel) in line.iter_mut().enumerate() {
-            let band = (row as u32 + index * 4) / 16 % 2;
-            let stripe = (col as u32 / 8) % 2;
-            *pixel = if band == stripe { 200 } else { 40 };
-        }
-    }
-    frame
+    scrolling_document(WIDTH, HEIGHT, index)
 }
 
 /// PSNR plane Y dalam dB; makin besar makin mirip.
