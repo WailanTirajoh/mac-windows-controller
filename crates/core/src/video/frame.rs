@@ -16,7 +16,7 @@ pub struct I420Frame {
 impl I420Frame {
     /// Membuat frame hitam berukuran `width` x `height` (keduanya harus genap).
     pub fn new(width: u32, height: u32, timestamp_us: u64) -> Self {
-        assert!(width % 2 == 0 && height % 2 == 0, "ukuran I420 harus genap");
+        assert!(width.is_multiple_of(2) && height.is_multiple_of(2), "ukuran I420 harus genap");
         let luma = width as usize * height as usize;
         Self {
             width,
