@@ -1,0 +1,25 @@
+[package]
+name = "sambung-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Inti Sambung: capture, video, jaringan, pairing, transfer. Tanpa dependensi UI."
+
+[dependencies]
+anyhow = "1.0.104"
+openh264 = "0.9"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-foundation = "0.3"
+objc2-screen-capture-kit = "0.3"

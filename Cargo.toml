@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/WailanTirajoh/mac-windows-controller"
+
+[profile.dev.package."*"]
+# Encoder dan konversi warna terlalu lambat tanpa optimasi, bahkan saat debug.
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

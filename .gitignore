@@ -1,0 +1,19 @@
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+
+# Tauri
+src-tauri/gen/
+
+# Hasil uji lokal
+*.h264
+*.part
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
