@@ -50,6 +50,15 @@ pub fn request_system_access() {
     enigo_injector::prompt_for_access();
 }
 
+/// Posisi `value` dalam rentang 0..=65535 yang dipakai `SendInput` Windows
+/// untuk gerakan mouse absolut, relatif terhadap rentang piksel yang dimulai
+/// di `origin` sepanjang `length` piksel.
+pub fn to_absolute_units(value: i32, origin: i32, length: i32) -> i32 {
+    let last = i64::from(length.max(2)) - 1;
+    let offset = (i64::from(value) - i64::from(origin)).clamp(0, last);
+    ((offset * 65535 + last / 2) / last) as i32
+}
+
 /// Posisi piksel/point di koordinat global OS untuk posisi 0..1 di `display`.
 /// Hasilnya selalu di dalam monitor, juga untuk masukan di luar 0..1.
 pub fn to_global(x: f64, y: f64, display: &DisplayInfo) -> (i32, i32) {
@@ -94,6 +103,17 @@ mod tests {
         let left = display(-1280.0, -200.0, 1280.0, 720.0);
         assert_eq!(to_global(0.0, 0.0, &left), (-1280, -200));
         assert_eq!(to_global(1.0, 1.0, &left), (-1, 519));
+    }
+
+    #[test]
+    fn absolute_units_span_the_whole_virtual_desktop() {
+        // Desktop virtual 3200 piksel yang dimulai di -1280 (monitor kedua di kiri).
+        assert_eq!(to_absolute_units(-1280, -1280, 3200), 0);
+        assert_eq!(to_absolute_units(1919, -1280, 3200), 65535);
+        assert_eq!(to_absolute_units(320, -1280, 3200), 32778);
+        // Di luar desktop dijepit ke tepinya.
+        assert_eq!(to_absolute_units(-5000, -1280, 3200), 0);
+        assert_eq!(to_absolute_units(9000, -1280, 3200), 65535);
     }
 
     #[test]

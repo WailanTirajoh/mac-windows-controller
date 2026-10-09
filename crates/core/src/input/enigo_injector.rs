@@ -3,7 +3,9 @@
 use std::collections::HashSet;
 
 use anyhow::anyhow;
-use enigo::{Axis, Button, Coordinate, Direction, Enigo, Keyboard, Mouse, Settings};
+#[cfg(target_os = "macos")]
+use enigo::Coordinate;
+use enigo::{Axis, Button, Direction, Enigo, Keyboard, Mouse, Settings};
 
 use super::{keymap, to_global, InputInjector};
 use crate::capture::DisplayInfo;
@@ -39,9 +41,47 @@ impl EnigoInjector {
         })
     }
 
+    #[cfg(target_os = "macos")]
     fn move_to(&mut self, x: f64, y: f64, display: &DisplayInfo) -> anyhow::Result<()> {
         let (x, y) = to_global(x, y, display);
         self.enigo.move_mouse(x, y, Coordinate::Abs)?;
+        Ok(())
+    }
+
+    /// Gerakan absolut `enigo` di Windows hanya menjangkau monitor utama,
+    /// jadi di sini dikirim sendiri relatif terhadap seluruh desktop virtual.
+    #[cfg(target_os = "windows")]
+    fn move_to(&mut self, x: f64, y: f64, display: &DisplayInfo) -> anyhow::Result<()> {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK,
+            MOUSEINPUT,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+        };
+
+        let (x, y) = to_global(x, y, display);
+        // SAFETY: `GetSystemMetrics` tanpa prasyarat; `SendInput` menerima satu
+        // struktur INPUT yang valid beserta ukurannya.
+        let sent = unsafe {
+            let dx = super::to_absolute_units(x, GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN));
+            let dy = super::to_absolute_units(y, GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+            let input = INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx,
+                        dy,
+                        mouseData: 0,
+                        dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            SendInput(1, &input, size_of::<INPUT>() as i32)
+        };
+        anyhow::ensure!(sent == 1, "Windows menolak gerakan mouse");
         Ok(())
     }
 
