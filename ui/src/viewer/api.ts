@@ -33,6 +33,8 @@ export const viewerInput = (fingerprint: string, events: InputEvent[]) =>
 export const viewerSelectDisplay = (fingerprint: string, displayId: number) =>
   invoke<void>("viewer_select_display", { fingerprint, displayId });
 export const viewerRequestKeyframe = (fingerprint: string) => invoke<void>("viewer_request_keyframe", { fingerprint });
+export const viewerSetClipboardSync = (fingerprint: string, enabled: boolean) =>
+  invoke<void>("viewer_set_clipboard_sync", { fingerprint, enabled });
 
 export const onDisplayChanged = (handler: (displayId: number) => void): Promise<UnlistenFn> =>
   listen<number>("viewer-display-changed", (event) => handler(event.payload));

@@ -182,6 +182,8 @@ pub enum ControlMessage {
     RequestKeyframe,
     /// Sesi diakhiri oleh salah satu sisi.
     SessionStop,
+    /// Teks yang baru disalin di sisi pengirim, selama sesi berjalan.
+    Clipboard { text: String },
 
     Ping,
     Pong,

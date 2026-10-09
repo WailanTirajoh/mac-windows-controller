@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, watch, Semaphore};
 
 use super::SessionServices;
 use crate::capture::{CaptureBackend, CaptureConfig, DisplayInfo, ScreenCapturer};
+use crate::clipboard::ClipboardSync;
 use crate::input::InputInjector;
 use crate::protocol::{DisplayDesc, InputEvent, StreamKind, VideoHeader, VideoParams};
 use crate::video::openh264_enc::OpenH264Encoder;
@@ -34,6 +35,7 @@ pub struct HostSession {
     display: Arc<Mutex<DisplayInfo>>,
     capturer: Option<Box<dyn ScreenCapturer>>,
     input: Option<std_mpsc::Sender<InputEvent>>,
+    clipboard: ClipboardSync,
     /// Saat field ini di-drop, task pengirim berhenti, lalu thread encoder
     /// ikut berhenti karena kanal frame-nya tertutup.
     _alive: watch::Sender<()>,
@@ -58,13 +60,15 @@ fn pick_display(displays: &[DisplayInfo], requested: Option<u32>) -> anyhow::Res
 }
 
 impl HostSession {
-    /// Memulai capture dan pengiriman video lewat `connection`. Harus
+    /// Memulai capture dan pengiriman video lewat `connection`. Teks yang
+    /// disalin di perangkat ini selama sesi dikirim ke `copied`. Harus
     /// dipanggil dari dalam runtime tokio.
     pub fn start(
         connection: quinn::Connection,
         services: &SessionServices,
         display_id: Option<u32>,
         video: VideoParams,
+        copied: mpsc::UnboundedSender<String>,
     ) -> anyhow::Result<(Self, Vec<DisplayDesc>)> {
         let displays = services.capture.displays()?;
         let display = pick_display(&displays, display_id)?;
@@ -74,6 +78,9 @@ impl HostSession {
         })?;
 
         let (alive, ended) = watch::channel(());
+        let clipboard = ClipboardSync::start(Arc::clone(&services.clipboard), move |text| {
+            let _ = copied.send(text);
+        });
         let mut session = Self {
             capture: Arc::clone(&services.capture),
             video,
@@ -83,6 +90,7 @@ impl HostSession {
             display: Arc::new(Mutex::new(display.clone())),
             capturer: None,
             input: None,
+            clipboard,
             _alive: alive,
         };
         session.capturer = Some(session.start_capture(&display)?);
@@ -159,6 +167,11 @@ impl HostSession {
 
     pub fn request_keyframe(&self) {
         self.keyframe.store(true, Ordering::Relaxed);
+    }
+
+    /// Menerapkan teks yang disalin di perangkat pengendali.
+    pub fn receive_clipboard(&self, text: String) {
+        self.clipboard.receive(text);
     }
 
     /// Kanal ke injector, untuk stream input dari pengendali. `None` kalau

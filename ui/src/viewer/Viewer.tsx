@@ -9,6 +9,7 @@ import {
   viewerInput,
   viewerRequestKeyframe,
   viewerSelectDisplay,
+  viewerSetClipboardSync,
   viewerStart,
 } from "./api";
 import { H264Decoder } from "./decoder";
@@ -28,6 +29,7 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
   const [session, setSession] = useState<SessionView | null>(null);
   const [displayId, setDisplayId] = useState<number | null>(null);
   const [swapped, setSwapped] = useState(false);
+  const [clipboardSync, setClipboardSync] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
 
   // Video: frame dari Rust → decoder → kanvas.
@@ -87,6 +89,11 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
     setSwapped(swapModifiers.current);
   };
 
+  const toggleClipboard = () => {
+    setClipboardSync(!clipboardSync);
+    void viewerSetClipboardSync(fingerprint, !clipboardSync);
+  };
+
   const toggleFullscreen = async () => {
     const current = getCurrentWindow();
     await current.setFullscreen(!(await current.isFullscreen()));
@@ -117,6 +124,17 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
         {session?.inputEnabled && (
           <button type="button" className={TOOLBAR_BUTTON} aria-pressed={swapped} onClick={toggleSwap}>
             Tukar Cmd ⇄ Ctrl
+          </button>
+        )}
+        {session && (
+          <button
+            type="button"
+            className={TOOLBAR_BUTTON}
+            aria-pressed={clipboardSync}
+            title="Teks yang disalin di satu perangkat bisa ditempel di perangkat lain"
+            onClick={toggleClipboard}
+          >
+            Clipboard
           </button>
         )}
         <button type="button" className={TOOLBAR_BUTTON} onClick={() => void toggleFullscreen()}>

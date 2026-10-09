@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use sambung_core::capture::synthetic::SyntheticCapture;
+use sambung_core::clipboard::NullClipboard;
 use sambung_core::input::recording::RecordingInput;
 use sambung_core::node::{Node, NodeConfig, NodeEvent};
 use sambung_core::pairing::otp::OtpPolicy;
@@ -100,9 +101,17 @@ fn start_session(app: &AppHandle) -> anyhow::Result<()> {
             SessionServices {
                 capture: Arc::new(SyntheticCapture::two_displays()),
                 input: Arc::new(input.clone()),
+                clipboard: Arc::new(NullClipboard),
             },
         )?;
-        let (controller, _events) = node("pengendali", SessionServices::default())?;
+        // Uji mandiri tidak boleh membaca atau mengubah clipboard pengguna.
+        let (controller, _events) = node(
+            "pengendali",
+            SessionServices {
+                clipboard: Arc::new(NullClipboard),
+                ..SessionServices::default()
+            },
+        )?;
 
         let peer = controller.connect(host.local_address()?, None).await?;
         peer.request_pairing().await?;

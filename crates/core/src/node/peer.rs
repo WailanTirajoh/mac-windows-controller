@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use super::{
     ConnectError, DeviceInfo, Inner, PairError, CLOSE_IDENTITY, CLOSE_NORMAL, CLOSE_PROTOCOL, HANDSHAKE_TIMEOUT,
 };
+use crate::clipboard::ClipboardSync;
 use crate::identity::Fingerprint;
 use crate::net::Link;
 use crate::pairing::pake::{self, Binding};
@@ -26,7 +27,14 @@ use crate::session::controller::{self, InputSender, SessionEvent, SessionInfo, E
 /// tujuan harus menyalakan capture layar dulu.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(20);
 
-type SessionEvents = Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>;
+/// Tujuan pesan sesi yang dikirim perangkat tujuan tanpa diminta.
+struct ActiveSession {
+    events: mpsc::Sender<SessionEvent>,
+    /// Baru ada setelah perangkat tujuan menerima sesinya.
+    clipboard: Option<Arc<ClipboardSync>>,
+}
+
+type SessionSlot = Arc<Mutex<Option<ActiveSession>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -50,8 +58,7 @@ pub struct Peer {
     outbox: mpsc::UnboundedSender<ControlMessage>,
     /// Balasan atas permintaan. Kuncinya juga membuat permintaan berjalan satu per satu.
     replies: tokio::sync::Mutex<mpsc::UnboundedReceiver<ControlMessage>>,
-    /// Tujuan event sesi yang dikirim perangkat tujuan tanpa diminta.
-    session_events: SessionEvents,
+    session: SessionSlot,
 }
 
 impl Peer {
@@ -107,11 +114,11 @@ impl Peer {
             inner.refresh(known, &info, address);
         }
 
-        let session_events = SessionEvents::default();
+        let session = SessionSlot::default();
         let (outbox, outgoing) = mpsc::unbounded_channel();
         let (reply_sender, replies) = mpsc::unbounded_channel();
         tokio::spawn(write_control(send, outgoing));
-        tokio::spawn(read_control(recv, reply_sender, Arc::clone(&session_events)));
+        tokio::spawn(read_control(recv, reply_sender, Arc::clone(&session)));
 
         Ok(Self {
             inner: Arc::clone(inner),
@@ -120,7 +127,7 @@ impl Peer {
             paired: AtomicBool::new(known.is_some() && trusts_peer),
             outbox,
             replies: tokio::sync::Mutex::new(replies),
-            session_events,
+            session,
             link,
         })
     }
@@ -210,7 +217,10 @@ impl Peer {
             events.clone(),
             self.outbox.clone(),
         ));
-        *self.session_events.lock().unwrap() = Some(events);
+        *self.session.lock().unwrap() = Some(ActiveSession {
+            events,
+            clipboard: None,
+        });
 
         let started = match self.exchange(ControlMessage::SessionStart { display_id, video }).await {
             Ok(ControlMessage::SessionStarted {
@@ -229,17 +239,30 @@ impl Peer {
         };
 
         match started {
-            Ok(info) => Ok(Session {
-                info,
-                events: receiver,
-                input: InputSender::open(self.link.connection.clone()),
-                video_task,
-                session_events: Arc::clone(&self.session_events),
-                outbox: self.outbox.clone(),
-            }),
+            Ok(info) => {
+                let outbox = self.outbox.clone();
+                let clipboard = Arc::new(ClipboardSync::start(
+                    Arc::clone(&self.inner.services.clipboard),
+                    move |text| {
+                        let _ = outbox.send(ControlMessage::Clipboard { text });
+                    },
+                ));
+                if let Some(active) = self.session.lock().unwrap().as_mut() {
+                    active.clipboard = Some(Arc::clone(&clipboard));
+                }
+                Ok(Session {
+                    info,
+                    events: receiver,
+                    input: InputSender::open(self.link.connection.clone()),
+                    clipboard,
+                    video_task,
+                    slot: Arc::clone(&self.session),
+                    outbox: self.outbox.clone(),
+                })
+            }
             Err(error) => {
                 video_task.abort();
-                *self.session_events.lock().unwrap() = None;
+                *self.session.lock().unwrap() = None;
                 Err(error)
             }
         }
@@ -263,8 +286,9 @@ pub struct Session {
     pub events: mpsc::Receiver<SessionEvent>,
     /// Pengirim event input; bisa di-clone dan dipakai dari task lain.
     pub input: InputSender,
+    clipboard: Arc<ClipboardSync>,
     video_task: JoinHandle<()>,
-    session_events: SessionEvents,
+    slot: SessionSlot,
     outbox: mpsc::UnboundedSender<ControlMessage>,
 }
 
@@ -277,12 +301,17 @@ impl Session {
     pub fn request_keyframe(&self) {
         let _ = self.outbox.send(ControlMessage::RequestKeyframe);
     }
+
+    /// Menyalakan atau mematikan sinkronisasi clipboard untuk sesi ini.
+    pub fn set_clipboard_sync(&self, enabled: bool) {
+        self.clipboard.set_enabled(enabled);
+    }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         self.video_task.abort();
-        *self.session_events.lock().unwrap() = None;
+        *self.slot.lock().unwrap() = None;
         let _ = self.outbox.send(ControlMessage::SessionStop);
     }
 }
@@ -299,10 +328,10 @@ async fn write_control(mut send: quinn::SendStream, mut outgoing: mpsc::Unbounde
 async fn read_control(
     mut recv: quinn::RecvStream,
     replies: mpsc::UnboundedSender<ControlMessage>,
-    session_events: SessionEvents,
+    session: SessionSlot,
 ) {
     let forward = |event: SessionEvent| {
-        let events = session_events.lock().unwrap().clone();
+        let events = session.lock().unwrap().as_ref().map(|active| active.events.clone());
         async move {
             if let Some(events) = events {
                 let _ = events.send(event).await;
@@ -315,6 +344,12 @@ async fn read_control(
             // Dikirim perangkat tujuan tanpa diminta, jadi bukan balasan.
             ControlMessage::DisplayChanged { display_id } => forward(SessionEvent::DisplayChanged(display_id)).await,
             ControlMessage::SessionStop => forward(SessionEvent::Ended).await,
+            ControlMessage::Clipboard { text } => {
+                let clipboard = session.lock().unwrap().as_ref().and_then(|active| active.clipboard.clone());
+                if let Some(clipboard) = clipboard {
+                    clipboard.receive(text);
+                }
+            }
             reply => {
                 if replies.send(reply).is_err() {
                     break;

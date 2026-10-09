@@ -2,6 +2,7 @@
 //! jaringan, pairing, transfer, dan video bisa dites dengan `cargo test`.
 
 pub mod capture;
+pub mod clipboard;
 pub mod discovery;
 pub mod identity;
 pub mod input;

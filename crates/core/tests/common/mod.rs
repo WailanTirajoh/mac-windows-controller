@@ -4,8 +4,10 @@
 #![allow(dead_code)]
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
+use sambung_core::clipboard::NullClipboard;
 use sambung_core::node::{Node, NodeConfig, NodeEvent, Peer};
 use sambung_core::pairing::otp::OtpPolicy;
 use sambung_core::session::SessionServices;
@@ -22,9 +24,17 @@ pub struct TestNode {
     _data: TempDir,
 }
 
+/// Layanan bawaan, kecuali clipboard: test tidak boleh menyentuh clipboard pengguna.
+pub fn services() -> SessionServices {
+    SessionServices {
+        clipboard: Arc::new(NullClipboard),
+        ..SessionServices::default()
+    }
+}
+
 impl TestNode {
     pub fn start(name: &str) -> Self {
-        Self::start_with(name, OtpPolicy::default(), SessionServices::default())
+        Self::start_with(name, OtpPolicy::default(), services())
     }
 
     pub fn start_with(name: &str, otp_policy: OtpPolicy, services: SessionServices) -> Self {

@@ -22,6 +22,14 @@ const LONG_EDGE_RANGE: (u32, u32) = (320, 3840);
 const FPS_RANGE: (u32, u32) = (1, 60);
 const BITRATE_RANGE: (u32, u32) = (500_000, 50_000_000);
 
+/// Teks berikutnya dari clipboard lokal. Tidak pernah selesai kalau tidak ada sesi.
+async fn next_copied(copied: &mut Option<mpsc::UnboundedReceiver<String>>) -> Option<String> {
+    match copied {
+        Some(copied) => copied.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Melayani satu koneksi masuk sampai ditutup.
 pub(super) async fn serve(inner: Arc<Inner>, incoming: quinn::Incoming) -> anyhow::Result<()> {
     let link = Link::new(incoming.await?)?;
@@ -81,6 +89,7 @@ pub(super) async fn serve(inner: Arc<Inner>, incoming: quinn::Incoming) -> anyho
         pending: None,
         code_shown: false,
         session: None,
+        copied: None,
     };
     let result = responder.run().await;
     reader.abort();
@@ -100,6 +109,8 @@ struct Responder {
     code_shown: bool,
     /// Sesi remote desktop yang sedang berjalan untuk koneksi ini.
     session: Option<HostSession>,
+    /// Teks yang disalin di perangkat ini selama sesi, untuk dikirim ke pengendali.
+    copied: Option<mpsc::UnboundedReceiver<String>>,
 }
 
 impl Responder {
@@ -121,6 +132,9 @@ impl Responder {
                 },
                 stream = self.link.connection.accept_uni() => self.on_stream(stream?)?,
                 stream = self.link.connection.accept_bi() => self.on_stream(stream?.1)?,
+                Some(text) = next_copied(&mut self.copied) => {
+                    self.reply(ControlMessage::Clipboard { text }).await?;
+                }
             }
         }
     }
@@ -148,6 +162,12 @@ impl Responder {
             }
             ControlMessage::SessionStop => {
                 self.end_session().await;
+                Ok(())
+            }
+            ControlMessage::Clipboard { text } => {
+                if let Some(session) = &self.session {
+                    session.receive_clipboard(text);
+                }
                 Ok(())
             }
             other => {
@@ -199,11 +219,15 @@ impl Responder {
         // Menyalakan capture bisa menunggu OS beberapa saat, jadi tidak di thread async.
         let connection = self.link.connection.clone();
         let services = self.inner.services.clone();
-        let started =
-            tokio::task::spawn_blocking(move || HostSession::start(connection, &services, display_id, video)).await?;
+        let (copied, copied_texts) = mpsc::unbounded_channel();
+        let started = tokio::task::spawn_blocking(move || {
+            HostSession::start(connection, &services, display_id, video, copied)
+        })
+        .await?;
 
         match started {
             Ok((session, displays)) => {
+                self.copied = Some(copied_texts);
                 let reply = ControlMessage::SessionStarted {
                     displays,
                     display_id: session.display_id(),
@@ -252,6 +276,7 @@ impl Responder {
         let Some(session) = self.session.take() else {
             return;
         };
+        self.copied = None;
         self.inner.controllers.lock().unwrap().remove(&self.peer.fingerprint);
         // Menghentikan capture bisa menunggu OS sebentar.
         let _ = tokio::task::spawn_blocking(move || drop(session)).await;

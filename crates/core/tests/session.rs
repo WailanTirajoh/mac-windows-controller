@@ -11,6 +11,7 @@ use common::{pair, TestNode, WAIT};
 use openh264::decoder::Decoder;
 use openh264::formats::YUVSource;
 use sambung_core::capture::{CaptureBackend, CaptureConfig, DisplayInfo, FrameSink, ScreenCapturer};
+use sambung_core::clipboard::ClipboardBackend;
 use sambung_core::input::{InputBackend, InputInjector};
 use sambung_core::node::{NodeEvent, Session, SessionError};
 use sambung_core::pairing::otp::OtpPolicy;
@@ -137,16 +138,48 @@ impl InputBackend for FakeInput {
     }
 }
 
+/// Clipboard tiruan milik satu perangkat.
+#[derive(Default)]
+struct FakeClipboard {
+    text: Mutex<Option<String>>,
+    /// Teks yang ditulis oleh sinkronisasi (bukan oleh "pengguna").
+    writes: Mutex<Vec<String>>,
+}
+
+impl FakeClipboard {
+    /// Pengguna menyalin `text`.
+    fn copy(&self, text: &str) {
+        *self.text.lock().unwrap() = Some(text.to_owned());
+    }
+
+    fn text(&self) -> Option<String> {
+        self.text.lock().unwrap().clone()
+    }
+}
+
+impl ClipboardBackend for FakeClipboard {
+    fn read_text(&self) -> Option<String> {
+        self.text()
+    }
+
+    fn write_text(&self, text: &str) {
+        self.copy(text);
+        self.writes.lock().unwrap().push(text.to_owned());
+    }
+}
+
 /// Perangkat tujuan dengan layanan tiruan, beserta pegangan untuk memeriksanya.
 struct Host {
     node: TestNode,
     input: Arc<InputLog>,
     captures_running: Arc<AtomicUsize>,
+    clipboard: Arc<FakeClipboard>,
 }
 
 fn host_with(displays: Vec<DisplayInfo>, input_available: bool) -> Host {
     let input = Arc::new(InputLog::default());
     let captures_running = Arc::new(AtomicUsize::new(0));
+    let clipboard = Arc::new(FakeClipboard::default());
     let services = SessionServices {
         capture: Arc::new(FakeCapture {
             displays,
@@ -156,13 +189,28 @@ fn host_with(displays: Vec<DisplayInfo>, input_available: bool) -> Host {
             log: Arc::clone(&input),
             available: input_available,
         }),
+        clipboard: Arc::clone(&clipboard) as Arc<dyn ClipboardBackend>,
     };
     Host {
         node: TestNode::start_with("PC", OtpPolicy::default(), services),
         input,
         captures_running,
+        clipboard,
     }
 }
+
+/// Perangkat pengendali dengan clipboard tiruan.
+fn controller() -> (TestNode, Arc<FakeClipboard>) {
+    let clipboard = Arc::new(FakeClipboard::default());
+    let services = SessionServices {
+        clipboard: Arc::clone(&clipboard) as Arc<dyn ClipboardBackend>,
+        ..common::services()
+    };
+    (TestNode::start_with("MacBook", OtpPolicy::default(), services), clipboard)
+}
+
+/// Lebih lama dari satu putaran pemantauan clipboard (500 ms).
+const CLIPBOARD_SETTLE: Duration = Duration::from_millis(1300);
 
 fn host() -> Host {
     host_with(two_displays(), true)
@@ -457,4 +505,91 @@ async fn forgetting_the_controller_ends_its_session() {
     pc.node.node.forget(&mac.node.info().fingerprint).unwrap();
 
     eventually("capture berhenti", || pc.captures_running.load(Ordering::Relaxed) == 0).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn text_copied_during_a_session_reaches_the_other_device() {
+    let (mac, mac_clipboard) = controller();
+    let mut pc = host();
+    let peer = pair(&mac, &mut pc.node).await;
+    let _session = peer.start_session(None, VIDEO).await.unwrap();
+
+    mac_clipboard.copy("dari Mac");
+    eventually("teks sampai di PC", || pc.clipboard.text().as_deref() == Some("dari Mac")).await;
+
+    pc.clipboard.copy("dari PC");
+    eventually("teks sampai di Mac", || mac_clipboard.text().as_deref() == Some("dari PC")).await;
+
+    // Tidak ada pantulan: tiap sisi hanya menulis satu kali.
+    tokio::time::sleep(CLIPBOARD_SETTLE).await;
+    assert_eq!(*pc.clipboard.writes.lock().unwrap(), ["dari Mac"]);
+    assert_eq!(*mac_clipboard.writes.lock().unwrap(), ["dari PC"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn text_copied_before_the_session_is_not_shared() {
+    let (mac, mac_clipboard) = controller();
+    let mut pc = host();
+    mac_clipboard.copy("rahasia di Mac");
+    pc.clipboard.copy("rahasia di PC");
+    let peer = pair(&mac, &mut pc.node).await;
+
+    let _session = peer.start_session(None, VIDEO).await.unwrap();
+    tokio::time::sleep(CLIPBOARD_SETTLE).await;
+
+    assert_eq!(pc.clipboard.text().as_deref(), Some("rahasia di PC"));
+    assert_eq!(mac_clipboard.text().as_deref(), Some("rahasia di Mac"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_is_not_shared_without_a_session() {
+    let (mac, mac_clipboard) = controller();
+    let mut pc = host();
+    let _peer = pair(&mac, &mut pc.node).await;
+
+    mac_clipboard.copy("tanpa sesi");
+    tokio::time::sleep(CLIPBOARD_SETTLE).await;
+
+    assert_eq!(pc.clipboard.text(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_clipboard_sync_off_stops_both_directions() {
+    let (mac, mac_clipboard) = controller();
+    let mut pc = host();
+    let peer = pair(&mac, &mut pc.node).await;
+    let session = peer.start_session(None, VIDEO).await.unwrap();
+
+    session.set_clipboard_sync(false);
+    mac_clipboard.copy("dari Mac");
+    pc.clipboard.copy("dari PC");
+    tokio::time::sleep(CLIPBOARD_SETTLE).await;
+
+    assert_eq!(pc.clipboard.text().as_deref(), Some("dari PC"), "Mac tidak mengirim");
+    assert_eq!(mac_clipboard.text().as_deref(), Some("dari Mac"), "Mac tidak menerapkan kiriman PC");
+
+    // Setelah dinyalakan lagi, yang disalin saat mati tidak ikut terkirim.
+    session.set_clipboard_sync(true);
+    tokio::time::sleep(CLIPBOARD_SETTLE).await;
+    assert_eq!(pc.clipboard.text().as_deref(), Some("dari PC"));
+
+    mac_clipboard.copy("setelah nyala");
+    eventually("teks baru sampai", || pc.clipboard.text().as_deref() == Some("setelah nyala")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_sync_stops_when_the_session_ends() {
+    let (mac, mac_clipboard) = controller();
+    let mut pc = host();
+    let peer = pair(&mac, &mut pc.node).await;
+    let session = peer.start_session(None, VIDEO).await.unwrap();
+    drop(session);
+    eventually("sesi berakhir", || pc.captures_running.load(Ordering::Relaxed) == 0).await;
+
+    mac_clipboard.copy("setelah sesi");
+    pc.clipboard.copy("setelah sesi di PC");
+    tokio::time::sleep(CLIPBOARD_SETTLE).await;
+
+    assert_eq!(pc.clipboard.text().as_deref(), Some("setelah sesi di PC"));
+    assert_eq!(mac_clipboard.text().as_deref(), Some("setelah sesi"));
 }

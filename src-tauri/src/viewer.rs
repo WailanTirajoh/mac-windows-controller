@@ -30,6 +30,7 @@ type CommandResult<T> = Result<T, String>;
 enum ViewerCommand {
     SelectDisplay(u32),
     RequestKeyframe,
+    SetClipboardSync(bool),
 }
 
 /// Pegangan ke sesi yang sedang berjalan. Men-drop-nya mengakhiri sesi.
@@ -189,6 +190,7 @@ async fn pump(
             command = commands.recv() => match command {
                 Some(ViewerCommand::SelectDisplay(display_id)) => session.select_display(display_id),
                 Some(ViewerCommand::RequestKeyframe) => session.request_keyframe(),
+                Some(ViewerCommand::SetClipboardSync(enabled)) => session.set_clipboard_sync(enabled),
                 // Pegangan di-drop: jendela ditutup atau sesi diganti.
                 None => break,
             },
@@ -228,5 +230,13 @@ pub fn viewer_select_display(state: State<'_, AppState>, fingerprint: String, di
 pub fn viewer_request_keyframe(state: State<'_, AppState>, fingerprint: String) -> CommandResult<()> {
     with_viewer(&state, &fingerprint, |viewer| {
         let _ = viewer.commands.send(ViewerCommand::RequestKeyframe);
+    })
+}
+
+/// Menyalakan atau mematikan sinkronisasi clipboard untuk sesi ini.
+#[tauri::command]
+pub fn viewer_set_clipboard_sync(state: State<'_, AppState>, fingerprint: String, enabled: bool) -> CommandResult<()> {
+    with_viewer(&state, &fingerprint, |viewer| {
+        let _ = viewer.commands.send(ViewerCommand::SetClipboardSync(enabled));
     })
 }

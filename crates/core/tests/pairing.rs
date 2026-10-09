@@ -5,13 +5,12 @@ mod common;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use common::{pair, TestNode, LOCALHOST, WAIT};
+use common::{pair, services, TestNode, LOCALHOST, WAIT};
 use sambung_core::identity::Identity;
 use sambung_core::net::{self, Link};
 use sambung_core::node::{ConnectError, PairError};
 use sambung_core::pairing::otp::OtpPolicy;
 use sambung_core::protocol::{read_message, write_message, ControlMessage, PairFailure, StreamKind, PROTOCOL_VERSION};
-use sambung_core::session::SessionServices;
 use sambung_core::trust::Os;
 use tokio::io::AsyncWriteExt;
 
@@ -149,7 +148,7 @@ async fn expired_code_is_rejected() {
             ttl: Duration::from_millis(50),
             ..OtpPolicy::default()
         },
-        SessionServices::default(),
+        services(),
     );
     let peer = a.node.connect(b.address, None).await.unwrap();
     peer.request_pairing().await.unwrap();

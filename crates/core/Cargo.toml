@@ -39,4 +39,5 @@ objc2-foundation = "0.3"
 objc2-screen-capture-kit = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+arboard = { version = "3", default-features = false }
 enigo = { version = "0.6", default-features = false, features = ["platform_specific"] }
