@@ -112,7 +112,7 @@ impl Inner {
             && self.trust.get(peer).is_some_and(|device| device.allow_incoming)
     }
 
-    fn remember(&self, peer: &DeviceInfo, allow_incoming: bool) -> anyhow::Result<()> {
+    fn remember(&self, peer: &DeviceInfo, allow_incoming: bool, address: SocketAddr) -> anyhow::Result<()> {
         let paired_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
@@ -122,9 +122,27 @@ impl Inner {
             os: peer.os,
             allow_incoming,
             paired_at,
+            last_address: Some(address),
         })?;
         self.emit(NodeEvent::TrustChanged);
         Ok(())
+    }
+
+    /// Memperbarui nama dan alamat perangkat tersimpan kalau berubah.
+    fn refresh(&self, known: &TrustedDevice, peer: &DeviceInfo, address: SocketAddr) {
+        if known.name == peer.name && known.os == peer.os && known.last_address == Some(address) {
+            return;
+        }
+        let updated = TrustedDevice {
+            name: peer.name.clone(),
+            os: peer.os,
+            last_address: Some(address),
+            ..known.clone()
+        };
+        match self.trust.upsert(updated) {
+            Ok(()) => self.emit(NodeEvent::TrustChanged),
+            Err(error) => tracing::warn!("gagal memperbarui perangkat tersimpan: {error:#}"),
+        }
     }
 }
 
@@ -194,6 +212,16 @@ impl Node {
         Ok(removed)
     }
 
+    /// Menolak permintaan pairing dari `peer`: kode yang sedang tampil dicabut.
+    pub fn reject_pairing(&self, peer: &Fingerprint) {
+        if self.inner.otp.lock().unwrap().cancel(*peer) {
+            self.inner.emit(NodeEvent::PairingFinished {
+                peer: *peer,
+                paired: false,
+            });
+        }
+    }
+
     /// Mengatur apakah perangkat lain boleh mengendalikan atau pairing ke perangkat ini.
     pub fn set_accept_incoming(&self, accept: bool) {
         self.inner.accept_incoming.store(accept, Ordering::Relaxed);
@@ -241,13 +269,19 @@ impl Node {
             return Err(ConnectError::Incompatible { theirs: protocol });
         }
 
+        let info = DeviceInfo {
+            fingerprint: link.peer_fingerprint,
+            name,
+            os,
+        };
+        if let Some(known) = &known {
+            inner.refresh(known, &info, address);
+        }
+
         Ok(Peer {
             inner: Arc::clone(inner),
-            info: DeviceInfo {
-                fingerprint: link.peer_fingerprint,
-                name,
-                os,
-            },
+            info,
+            address,
             paired: AtomicBool::new(known.is_some() && trusts_peer),
             control: tokio::sync::Mutex::new((send, recv)),
             link,
@@ -266,6 +300,8 @@ pub struct Peer {
     link: Link,
     control: tokio::sync::Mutex<(quinn::SendStream, quinn::RecvStream)>,
     pub info: DeviceInfo,
+    /// Alamat yang dipakai untuk koneksi ini.
+    pub address: SocketAddr,
     paired: AtomicBool,
 }
 
@@ -326,7 +362,7 @@ impl Peer {
             _ => return Err(PairFailure::Protocol.into()),
         }
 
-        self.inner.remember(&self.info, allow_reverse)?;
+        self.inner.remember(&self.info, allow_reverse, self.address)?;
         self.paired.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -525,7 +561,10 @@ impl Responder {
         }
 
         self.inner.otp.lock().unwrap().succeed(self.peer.fingerprint);
-        self.inner.remember(&self.peer, true)?;
+        // Koneksi keluar lawan memakai soket yang sama dengan port dengarnya,
+        // jadi alamat asal koneksi ini juga alamat untuk menghubunginya balik.
+        self.inner
+            .remember(&self.peer, true, self.link.connection.remote_address())?;
         self.close_dialog(true);
         self.reply(ControlMessage::PairDone {
             confirm: expected.responder.to_vec(),

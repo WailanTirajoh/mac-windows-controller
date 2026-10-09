@@ -17,3 +17,6 @@ src-tauri/gen/
 Thumbs.db
 .idea/
 .vscode/
+
+# Konfigurasi pratinjau lokal
+.claude/launch.json

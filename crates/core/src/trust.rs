@@ -1,6 +1,7 @@
 //! Daftar perangkat yang sudah di-pair, disimpan sebagai JSON.
 
 use std::fs;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -19,6 +20,26 @@ pub enum Os {
 }
 
 impl Os {
+    /// Nama yang sama dengan bentuk serde-nya; dipakai di record discovery.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Macos => "macos",
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Nama yang tidak dikenal menjadi [`Os::Unknown`].
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "macos" => Self::Macos,
+            "windows" => Self::Windows,
+            "linux" => Self::Linux,
+            _ => Self::Unknown,
+        }
+    }
+
     pub const fn current() -> Self {
         if cfg!(target_os = "macos") {
             Self::Macos
@@ -41,6 +62,10 @@ pub struct TrustedDevice {
     pub allow_incoming: bool,
     /// Waktu pairing, detik sejak epoch Unix.
     pub paired_at: u64,
+    /// Alamat terakhir yang berhasil dipakai. Berguna di jaringan yang
+    /// memblokir discovery; identitas tetap dicek lewat fingerprint.
+    #[serde(default)]
+    pub last_address: Option<SocketAddr>,
 }
 
 pub struct TrustStore {
@@ -119,6 +144,7 @@ mod tests {
             os: Os::Windows,
             allow_incoming: true,
             paired_at: 1_700_000_000,
+            last_address: Some("192.168.1.20:47823".parse().unwrap()),
         }
     }
 

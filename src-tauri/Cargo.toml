@@ -11,5 +11,15 @@ tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 anyhow = "1"
+gethostname = "1"
 sambung-core = { path = "../crates/core" }
+serde = { version = "1", features = ["derive"] }
 tauri = { version = "2.12", features = [] }
+tokio = { version = "1", features = ["net", "rt", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

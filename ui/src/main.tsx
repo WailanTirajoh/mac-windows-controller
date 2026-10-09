@@ -1,13 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { App } from "./App";
 import "./styles.css";
 
-function App() {
-  return (
-    <main className="flex h-full items-center justify-center bg-neutral-50 text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
-      <h1 className="text-2xl font-semibold">Sambung</h1>
-    </main>
-  );
+// `?mock` menjalankan UI di browser biasa dengan backend tiruan (hanya saat development).
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("mock")) {
+  const { installMock } = await import("./dev/mock");
+  installMock();
 }
 
 createRoot(document.getElementById("root")!).render(

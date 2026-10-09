@@ -117,11 +117,17 @@ async fn correct_code_makes_both_devices_trust_each_other() {
     assert_eq!(stored_on_a[0].fingerprint, b.node.info().fingerprint);
     assert_eq!(stored_on_a[0].name, "PC");
     assert_eq!(stored_on_a[0].os, Os::current());
+    assert_eq!(stored_on_a[0].last_address, Some(b.address));
 
     let stored_on_b = b.node.trusted_devices();
     assert_eq!(stored_on_b.len(), 1);
     assert_eq!(stored_on_b[0].fingerprint, a.node.info().fingerprint);
     assert!(stored_on_b[0].allow_incoming);
+    assert_eq!(
+        stored_on_b[0].last_address,
+        Some(a.address),
+        "B harus bisa menghubungi A balik lewat alamat asal koneksi"
+    );
 }
 
 #[tokio::test]

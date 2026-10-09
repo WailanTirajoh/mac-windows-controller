@@ -9,6 +9,7 @@ description = "Inti Sambung: capture, video, jaringan, pairing, transfer. Tanpa 
 [dependencies]
 anyhow = "1.0.104"
 hmac = "0.12"
+mdns-sd = "0.21"
 openh264 = "0.9"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
 rand = "0.8"
