@@ -73,6 +73,26 @@ pub fn native_code(code: &str) -> Option<u16> {
     lookup(code, cfg!(target_os = "windows"))
 }
 
+/// Flag `KEYBDINPUT.dwFlags` milik `SendInput` (nilainya dari `winuser.h`).
+pub const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
+pub const KEYEVENTF_KEYUP: u32 = 0x0002;
+pub const KEYEVENTF_SCANCODE: u32 = 0x0008;
+
+/// Isi `wScan` dan `dwFlags` untuk mengirim scancode Windows `native` lewat
+/// `SendInput`. Awalan `E0` tidak ikut di `wScan`; ia dinyatakan dengan flag
+/// extended. Tanpa flag itu tombol Windows dan Menu tidak dikenali, dan
+/// NumpadEnter atau panah terbaca sebagai kembarannya yang bukan extended.
+pub fn windows_key_input(native: u16, down: bool) -> (u16, u32) {
+    let mut flags = KEYEVENTF_SCANCODE;
+    if native & 0xFF00 == 0xE000 {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    if !down {
+        flags |= KEYEVENTF_KEYUP;
+    }
+    (native & 0x00FF, flags)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -108,6 +128,27 @@ mod tests {
         assert_eq!((lookup("KeyA", false), lookup("KeyA", true)), (Some(0x00), Some(0x1E)));
         assert_eq!((lookup("ArrowLeft", false), lookup("ArrowLeft", true)), (Some(0x7B), Some(0xE04B)));
         assert_eq!((lookup("MetaLeft", false), lookup("MetaLeft", true)), (Some(0x37), Some(0xE05B)));
+    }
+
+    #[test]
+    fn extended_scancodes_lose_their_prefix_and_gain_the_flag() {
+        // Enter biasa dan NumpadEnter berbagi scancode 0x1C; hanya flag extended yang membedakan.
+        assert_eq!(windows_key_input(0x1C, true), (0x1C, KEYEVENTF_SCANCODE));
+        assert_eq!(windows_key_input(0xE01C, true), (0x1C, KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY));
+        assert_eq!(
+            windows_key_input(0xE05B, false),
+            (0x5B, KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP)
+        );
+        assert_eq!(windows_key_input(0x1E, false), (0x1E, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP));
+    }
+
+    #[test]
+    fn every_windows_scancode_fits_one_byte_after_the_prefix() {
+        for (name, _, _) in KEYS {
+            let Some(native) = lookup(name, true) else { continue };
+            assert!(matches!(native >> 8, 0x00 | 0xE0), "{name}: awalan scancode tidak dikenal");
+            assert_ne!(windows_key_input(native, true).0, 0, "{name}");
+        }
     }
 
     #[test]
