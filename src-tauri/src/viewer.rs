@@ -111,8 +111,11 @@ fn window_label(fingerprint: &Fingerprint) -> String {
 }
 
 /// Membuka jendela viewer untuk perangkat yang sudah terhubung dan di-pair.
+///
+/// Harus `async`: di Windows, membuat jendela dari perintah sinkron saling
+/// mengunci dengan thread utama, dan jendelanya hanya tampil putih kosong.
 #[tauri::command]
-pub fn open_viewer(app: AppHandle, state: State<'_, AppState>, fingerprint: String) -> CommandResult<()> {
+pub async fn open_viewer(app: AppHandle, state: State<'_, AppState>, fingerprint: String) -> CommandResult<()> {
     let fingerprint = parse_fingerprint(&fingerprint)?;
     let name = state
         .peers
