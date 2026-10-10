@@ -18,11 +18,13 @@ pnpm install
 pnpm tauri dev
 ```
 
-Untuk mencoba dua instance di satu mesin, jalankan instance kedua dengan profil sendiri (data dan port terpisah):
+Untuk mencoba dua instance di satu mesin, biarkan `pnpm tauri dev` berjalan, lalu di terminal lain jalankan binary yang sama dengan profil sendiri (data dan port terpisah). Instance kedua memakai server UI milik instance pertama, jadi jangan menjalankan `pnpm tauri dev` dua kali.
 
 ```bash
-SAMBUNG_PROFILE=b pnpm tauri dev
+SAMBUNG_PROFILE=b ./target/debug/sambung
 ```
+
+Di PowerShell: `$env:SAMBUNG_PROFILE = "b"; .\target\debug\sambung.exe`.
 
 Installer dibuat dengan `pnpm tauri build`. GitHub Actions membuat `.dmg` dan `.exe` di tiap push ke `main`; hasilnya ada di artifact workflow **Build**.
 
