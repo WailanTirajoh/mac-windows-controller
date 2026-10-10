@@ -294,6 +294,36 @@ async fn unpaired_device_opening_another_stream_is_disconnected() {
     }
 }
 
+/// Perangkat dengan build lama membaca data jaringan secara berbeda (mis.
+/// header video tanpa `session_id`), jadi tidak boleh dilayani sama sekali.
+#[tokio::test]
+async fn device_with_another_protocol_version_is_told_and_not_served() {
+    let b = TestNode::start("PC");
+    let identity = Identity::generate().unwrap();
+    let endpoint = net::bind(&identity, LOCALHOST.parse().unwrap()).unwrap();
+    let link = Link::connect(&endpoint, b.address).await.unwrap();
+
+    let (mut send, mut recv) = link.connection.open_bi().await.unwrap();
+    send.write_u8(StreamKind::Control as u8).await.unwrap();
+    let hello = ControlMessage::Hello {
+        protocol: PROTOCOL_VERSION - 1,
+        name: "Build lama".to_owned(),
+        os: Os::current(),
+        trusts_peer: false,
+    };
+    write_message(&mut send, &hello).await.unwrap();
+
+    // Balasannya memuat versi tujuan, supaya build lama bisa menampilkan alasannya...
+    match read_message(&mut recv).await.unwrap() {
+        Some(ControlMessage::Hello { protocol, .. }) => assert_eq!(protocol, PROTOCOL_VERSION),
+        other => panic!("seharusnya dibalas hello, hasilnya {other:?}"),
+    }
+    // ...lalu kanal kontrolnya ditutup: permintaan apa pun tidak dijawab.
+    let _ = write_message(&mut send, &ControlMessage::Ping).await;
+    let reply = tokio::time::timeout(WAIT, read_message(&mut recv)).await.unwrap();
+    assert!(!matches!(reply, Ok(Some(_))), "build lama tidak boleh dilayani: {reply:?}");
+}
+
 /// Pihak ketiga yang duduk di antara A dan B, meneruskan kanal kontrol apa
 /// adanya lewat dua sesi TLS miliknya sendiri.
 async fn relay(endpoint: quinn::Endpoint, target: SocketAddr) -> anyhow::Result<()> {
