@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 
 use anyhow::anyhow;
+use enigo::{Axis, Button, Direction, Enigo, Mouse, Settings};
 #[cfg(target_os = "macos")]
-use enigo::Coordinate;
-use enigo::{Axis, Button, Direction, Enigo, Keyboard, Mouse, Settings};
+use enigo::{Coordinate, Keyboard};
 
 use super::{keymap, to_global, InputInjector};
 use crate::capture::DisplayInfo;
@@ -82,6 +82,38 @@ impl EnigoInjector {
             SendInput(1, &input, size_of::<INPUT>() as i32)
         };
         anyhow::ensure!(sent == 1, "Windows menolak gerakan mouse");
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn key(&mut self, native: u16, down: bool) -> anyhow::Result<()> {
+        self.enigo.raw(native, direction(down))?;
+        Ok(())
+    }
+
+    /// `enigo.raw` di Windows hanya menandai sebagian tombol sebagai extended:
+    /// tombol Windows dan Menu tidak sampai, dan NumpadEnter terbaca sebagai
+    /// Enter biasa. Jadi scancode dikirim sendiri.
+    #[cfg(target_os = "windows")]
+    fn key(&mut self, native: u16, down: bool) -> anyhow::Result<()> {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT};
+
+        let (scan, flags) = keymap::windows_key_input(native, down);
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: 0,
+                    wScan: scan,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        // SAFETY: `SendInput` menerima satu struktur INPUT yang valid beserta ukurannya.
+        let sent = unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) };
+        anyhow::ensure!(sent == 1, "Windows menolak event keyboard");
         Ok(())
     }
 
@@ -170,7 +202,7 @@ impl InputInjector for EnigoInjector {
                 let Some(native) = keymap::native_code(code) else {
                     return Ok(());
                 };
-                self.enigo.raw(native, direction(*down))?;
+                self.key(native, *down)?;
                 if *down {
                     self.held_keys.insert(native);
                 } else {
@@ -182,8 +214,8 @@ impl InputInjector for EnigoInjector {
     }
 
     fn release_all(&mut self) {
-        for native in self.held_keys.drain() {
-            let _ = self.enigo.raw(native, Direction::Release);
+        for native in std::mem::take(&mut self.held_keys) {
+            let _ = self.key(native, false);
         }
         for pressed in self.held_buttons.drain() {
             let _ = self.enigo.button(button(pressed), Direction::Release);

@@ -15,6 +15,12 @@ opt-level = 3
 [profile.dev.package.sambung-core]
 opt-level = 3
 
+# NASM 3.02 crash di Windows saat diminta membuat info debug (`-g`). Build
+# script OpenH264 lalu diam-diam membuang seluruh assembly, dan encoder debug
+# jadi sekitar lima kali lebih lambat. Tanpa info debug, `-g` tidak dikirim.
+[profile.dev.package.openh264-sys2]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

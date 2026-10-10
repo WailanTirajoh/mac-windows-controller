@@ -120,6 +120,16 @@ pub fn clear_transfers(app: AppHandle, state: State<'_, AppState>) {
     let _ = app.emit(EVENT_TRANSFERS_CHANGED, ());
 }
 
+/// Argumen `explorer` untuk membuka folder berisi `path` dengan file itu
+/// terpilih. Hanya path-nya yang dikutip: kalau seluruh argumen dikutip (yang
+/// dilakukan `Command::arg` begitu ada spasi) atau path berkoma tidak dikutip,
+/// Explorer membuka folder Dokumen. Nama file Windows tidak bisa memuat tanda
+/// kutip, jadi tidak ada yang perlu di-escape.
+#[cfg(any(target_os = "windows", test))]
+fn explorer_select_argument(path: &str) -> String {
+    format!("/select,\"{path}\"")
+}
+
 /// Menampilkan file hasil transfer di Finder atau Explorer.
 #[tauri::command]
 pub fn reveal_transfer(state: State<'_, AppState>, id: u64) -> CommandResult<()> {
@@ -135,7 +145,12 @@ pub fn reveal_transfer(state: State<'_, AppState>, id: u64) -> CommandResult<()>
     #[cfg(target_os = "macos")]
     let opened = std::process::Command::new("open").arg("-R").arg(&path).status();
     #[cfg(target_os = "windows")]
-    let opened = std::process::Command::new("explorer").arg(format!("/select,{path}")).status();
+    let opened = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer")
+            .raw_arg(explorer_select_argument(&path))
+            .status()
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let opened = std::process::Command::new("xdg-open")
         .arg(Path::new(&path).parent().unwrap_or(Path::new(".")))
@@ -183,6 +198,15 @@ mod tests {
         assert_eq!(transfers[0].status, TransferStatus::Done);
         assert_eq!(transfers[0].transferred, 1000);
         assert_eq!(transfers[0].path.as_deref(), Some("/unduhan/foto.jpg"));
+    }
+
+    #[test]
+    fn explorer_argument_quotes_only_the_path() {
+        assert_eq!(
+            explorer_select_argument(r"C:\Users\Budi Santoso\Downloads\Sambung\foto, liburan 1.jpg"),
+            r#"/select,"C:\Users\Budi Santoso\Downloads\Sambung\foto, liburan 1.jpg""#
+        );
+        assert_eq!(explorer_select_argument(r"C:\unduhan\foto.jpg"), r#"/select,"C:\unduhan\foto.jpg""#);
     }
 
     #[test]

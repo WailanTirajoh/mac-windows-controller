@@ -11,7 +11,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::trust::Os;
 
 pub const ALPN: &[u8] = b"sambung/1";
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Dinaikkan tiap kali bentuk data di jaringan berubah. Perangkat dengan versi
+/// berbeda menolak tersambung dengan pesan yang jelas; tanpa itu keduanya
+/// salah membaca data lawan (versi 2: `VideoHeader` memuat `session_id`).
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DEFAULT_PORT: u16 = 47823;
 
 /// Batas ukuran satu pesan kontrol. Cukup untuk clipboard 1 MB yang di-escape.
