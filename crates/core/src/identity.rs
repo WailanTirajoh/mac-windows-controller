@@ -54,7 +54,8 @@ impl FromStr for Fingerprint {
     fn from_str(hex: &str) -> Result<Self, Self::Err> {
         anyhow::ensure!(hex.len() == 64 && hex.is_ascii(), "fingerprint harus 64 digit hex");
         let mut bytes = [0u8; 32];
-        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+        let (pairs, _) = hex.as_bytes().as_chunks::<2>();
+        for (byte, pair) in bytes.iter_mut().zip(pairs) {
             let pair = std::str::from_utf8(pair)?;
             *byte = u8::from_str_radix(pair, 16).context("fingerprint bukan hex")?;
         }

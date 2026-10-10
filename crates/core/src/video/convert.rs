@@ -121,9 +121,10 @@ pub fn nv12_to_i420(y: &[u8], y_stride: usize, uv: &[u8], uv_stride: usize, out:
         .zip(uv.chunks(uv_stride))
         .take(chroma_h);
     for ((dst_u, dst_v), src) in rows {
-        for ((u, v), pair) in dst_u.iter_mut().zip(dst_v.iter_mut()).zip(src.chunks_exact(2)) {
-            *u = pair[0];
-            *v = pair[1];
+        let (pairs, _) = src.as_chunks::<2>();
+        for ((u, v), [cb, cr]) in dst_u.iter_mut().zip(dst_v.iter_mut()).zip(pairs) {
+            *u = *cb;
+            *v = *cr;
         }
     }
 }

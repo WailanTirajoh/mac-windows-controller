@@ -28,7 +28,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      # Versi yang sama dengan rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: clippy
       # Tanpa NASM, OpenH264 di x86 dibangun tanpa assembly dan jauh lebih lambat.
@@ -63,7 +64,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - uses: ilammy/setup-nasm@v1
         if: runner.os == 'Windows'
       - uses: Swatinem/rust-cache@v2

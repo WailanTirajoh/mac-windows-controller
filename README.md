@@ -69,7 +69,7 @@ Keamanan: tiap perangkat punya sertifikat self-signed. Koneksi memakai QUIC deng
 
 ## Batasan
 
-- Video memakai encoder H.264 software (OpenH264). Sisi panjang gambar dibatasi 1920 piksel.
+- Video memakai encoder H.264 software (OpenH264), jadi resolusi tinggi membebani CPU perangkat tujuan. Pilihan kualitas di viewer: Hemat (1280 piksel, 30 fps), Seimbang (1920 piksel, 60 fps), Tajam (2560 piksel, 60 fps).
 - Cmd+Tab, tombol Windows, dan Ctrl+Alt+Del tidak diteruskan ke perangkat tujuan.
 - Di Windows, jendela yang berjalan sebagai Administrator dan layar UAC tidak bisa dikendalikan.
 - Installer belum ditandatangani, jadi SmartScreen dan Gatekeeper menampilkan peringatan.

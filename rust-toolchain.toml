@@ -1,0 +1,5 @@
+# Versi Rust dikunci supaya hasil build dan lint sama di semua mesin dan di CI.
+# Kalau diubah, samakan juga di .github/workflows/build.yml.
+[toolchain]
+channel = "1.92.0"
+components = ["clippy"]
