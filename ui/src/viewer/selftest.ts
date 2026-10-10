@@ -154,15 +154,46 @@ export async function runSessionSelftest(): Promise<void> {
   const at = { clientX: rect.left + rect.width / 4, clientY: rect.top + rect.height / 2, bubbles: true };
   canvas.dispatchEvent(new PointerEvent("pointermove", at));
   await wait(50);
-  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyA", bubbles: true }));
-  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyA", bubbles: true }));
+  const pressKey = (code: string) => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true }));
+  };
+  pressKey("KeyA");
   await wait(400);
+  const size = `${canvas.width}x${canvas.height}`;
+  const luma = lumaRange(canvas);
+
+  /** Memilih nilai di salah satu pilihan toolbar, seperti yang dilakukan pengguna. */
+  const choose = (label: string, value: string) => {
+    const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
+    if (select === null) {
+      errors.push(`pilihan "${label}" tidak ada`);
+      return;
+    }
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  // Ganti kualitas memulai ulang sesi: video dan input harus tetap jalan.
+  choose("Kualitas video", "low");
+  await wait(1500);
+  const beforeRestartCheck = rowChecksum(canvas);
+  await wait(500);
+  const movingAfterQuality = rowChecksum(canvas) !== beforeRestartCheck;
+  pressKey("KeyB");
+  await wait(400);
+
+  // Pindah ke layar kedua, yang ukurannya berbeda.
+  choose("Pilih layar", "2");
+  for (let attempt = 0; attempt < 50 && canvas.width === 1280; attempt++) await wait(100);
 
   await invoke("selftest_report", {
     report: JSON.stringify({
-      size: `${canvas.width}x${canvas.height}`,
-      luma: lumaRange(canvas),
+      size,
+      luma,
       moving,
+      movingAfterQuality,
+      sizeAfterDisplayChange: `${canvas.width}x${canvas.height}`,
       toolbar: document.querySelector("header")?.textContent ?? "",
       errors,
     }),

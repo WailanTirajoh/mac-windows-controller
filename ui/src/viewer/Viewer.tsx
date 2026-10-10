@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, pickAndSendFiles, sendFiles } from "../api";
 import {
+  type Quality,
   type SessionView,
   onDisplayChanged,
   onSessionEnded,
@@ -11,6 +12,7 @@ import {
   viewerRequestKeyframe,
   viewerSelectDisplay,
   viewerSetClipboardSync,
+  viewerSetQuality,
   viewerStart,
 } from "./api";
 import { H264Decoder } from "./decoder";
@@ -31,6 +33,7 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
   const [displayId, setDisplayId] = useState<number | null>(null);
   const [swapped, setSwapped] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(true);
+  const [quality, setQuality] = useState<Quality>("balanced");
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -105,6 +108,11 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
     pickAndSendFiles(fingerprint).catch((error) => setFileNotice(errorMessage(error)));
   };
 
+  const changeQuality = (wanted: Quality) => {
+    setQuality(wanted);
+    void viewerSetQuality(fingerprint, wanted);
+  };
+
   const toggleClipboard = () => {
     setClipboardSync(!clipboardSync);
     void viewerSetClipboardSync(fingerprint, !clipboardSync);
@@ -135,6 +143,18 @@ export function Viewer({ fingerprint }: { fingerprint: string }) {
                 Layar {index + 1} ({display.width}×{display.height}){display.isPrimary ? " · utama" : ""}
               </option>
             ))}
+          </select>
+        )}
+        {session && (
+          <select
+            aria-label="Kualitas video"
+            value={quality}
+            onChange={(event) => changeQuality(event.target.value as Quality)}
+            className="rounded-md bg-neutral-800 px-2 py-1 text-xs"
+          >
+            <option value="low">Hemat</option>
+            <option value="balanced">Seimbang</option>
+            <option value="sharp">Tajam</option>
           </select>
         )}
         {session?.inputEnabled && (

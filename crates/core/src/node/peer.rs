@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -57,6 +57,8 @@ pub struct Peer {
     /// Alamat yang dipakai untuk koneksi ini.
     pub address: SocketAddr,
     paired: AtomicBool,
+    /// Nomor untuk sesi berikutnya di koneksi ini.
+    next_session: AtomicU32,
     /// Pesan kontrol keluar; ditulis ke stream oleh satu task.
     outbox: mpsc::UnboundedSender<ControlMessage>,
     /// Balasan atas permintaan. Kuncinya juga membuat permintaan berjalan satu per satu.
@@ -128,6 +130,7 @@ impl Peer {
             info,
             address,
             paired: AtomicBool::new(known.is_some() && trusts_peer),
+            next_session: AtomicU32::new(1),
             outbox,
             replies: tokio::sync::Mutex::new(replies),
             session,
@@ -219,9 +222,11 @@ impl Peer {
     /// Memulai sesi remote desktop. Sesi berakhir saat [`Session`] di-drop.
     pub async fn start_session(&self, display_id: Option<u32>, video: VideoParams) -> Result<Session, SessionError> {
         let (events, receiver) = mpsc::channel(EVENT_QUEUE);
+        let session_id = self.next_session.fetch_add(1, Ordering::Relaxed);
         // Penerima video dinyalakan sebelum meminta sesi supaya frame pertama tidak terlewat.
         let video_task = tokio::spawn(controller::receive_video(
             self.link.connection.clone(),
+            session_id,
             events.clone(),
             self.outbox.clone(),
         ));
@@ -230,7 +235,12 @@ impl Peer {
             clipboard: None,
         });
 
-        let started = match self.exchange(ControlMessage::SessionStart { display_id, video }).await {
+        let request = ControlMessage::SessionStart {
+            session_id,
+            display_id,
+            video,
+        };
+        let started = match self.exchange(request).await {
             Ok(ControlMessage::SessionStarted {
                 displays,
                 display_id,

@@ -333,7 +333,8 @@ async fn selecting_another_display_switches_video_and_input_target() {
     let mut pc = host();
     let peer = pair(&mac, &mut pc.node).await;
     let mut session = peer.start_session(None, VIDEO).await.unwrap();
-    assert_eq!(next_frame(&mut session).await.width, 640);
+    let mut last_of_old_display = next_frame(&mut session).await;
+    assert_eq!(last_of_old_display.width, 640);
 
     session.select_display(2);
 
@@ -353,9 +354,14 @@ async fn selecting_another_display_switches_video_and_input_target() {
         if frame.width != 640 {
             break frame;
         }
+        last_of_old_display = frame;
     };
     assert_eq!((first_of_new_display.width, first_of_new_display.height), (320, 240));
     assert!(first_of_new_display.keyframe, "monitor baru harus dimulai dengan keyframe");
+    assert!(
+        first_of_new_display.timestamp_us > last_of_old_display.timestamp_us,
+        "timestamp harus terus maju walau capture dimulai ulang"
+    );
     assert_eq!(pc.captures_running.load(Ordering::Relaxed), 1, "capture lama harus berhenti");
 
     session.input.send(InputEvent::Move { x: 0.0, y: 0.0 });
@@ -592,4 +598,28 @@ async fn clipboard_sync_stops_when_the_session_ends() {
 
     assert_eq!(pc.clipboard.text().as_deref(), Some("setelah sesi di PC"));
     assert_eq!(mac_clipboard.text().as_deref(), Some("setelah sesi"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn second_session_on_the_same_connection_gets_complete_video() {
+    let mac = TestNode::start("MacBook");
+    let mut pc = host();
+    let peer = pair(&mac, &mut pc.node).await;
+
+    // Seperti saat kualitas video diganti: sesi diakhiri lalu dimulai lagi.
+    let mut first = peer.start_session(None, VIDEO).await.unwrap();
+    for _ in 0..10 {
+        next_frame(&mut first).await;
+    }
+    drop(first);
+    let mut second = peer.start_session(None, VIDEO).await.unwrap();
+
+    // Semua frame sesi kedua harus sampai, berurutan dari keyframe pertamanya.
+    let mut decoder = Decoder::new().unwrap();
+    for index in 0..60 {
+        let frame = next_frame(&mut second).await;
+        assert_eq!(frame.keyframe, index == 0, "frame {index}");
+        decoder.decode(&frame.data).unwrap().expect("frame harus terdekode");
+    }
+    assert_eq!(pc.captures_running.load(Ordering::Relaxed), 1);
 }

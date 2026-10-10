@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use tokio::sync::{mpsc, watch, Semaphore};
@@ -28,6 +28,8 @@ const IDLE_POLL: Duration = Duration::from_millis(100);
 pub struct HostSession {
     capture: Arc<dyn CaptureBackend>,
     video: VideoParams,
+    /// Awal sesi; semua timestamp frame dihitung dari sini.
+    started: Instant,
     stop: Arc<AtomicBool>,
     keyframe: Arc<AtomicBool>,
     slot: Arc<LatestSlot<I420Frame>>,
@@ -66,6 +68,7 @@ impl HostSession {
     pub fn start(
         connection: quinn::Connection,
         services: &SessionServices,
+        session_id: u32,
         display_id: Option<u32>,
         video: VideoParams,
         copied: mpsc::UnboundedSender<String>,
@@ -84,6 +87,7 @@ impl HostSession {
         let mut session = Self {
             capture: Arc::clone(&services.capture),
             video,
+            started: Instant::now(),
             stop: Arc::new(AtomicBool::new(false)),
             keyframe: Arc::new(AtomicBool::new(false)),
             slot: Arc::new(LatestSlot::new()),
@@ -103,7 +107,7 @@ impl HostSession {
             Arc::clone(&session.keyframe),
             encoded,
         );
-        tokio::spawn(send_frames(connection, frames, Arc::clone(&session.stop), ended));
+        tokio::spawn(send_frames(connection, session_id, frames, Arc::clone(&session.stop), ended));
 
         // Tanpa injector (mis. izin belum ada) sesi tetap jalan, hanya untuk melihat.
         match services.input.open() {
@@ -116,6 +120,7 @@ impl HostSession {
 
     fn start_capture(&self, display: &DisplayInfo) -> anyhow::Result<Box<dyn ScreenCapturer>> {
         let slot = Arc::clone(&self.slot);
+        let started = self.started;
         self.capture.start(
             CaptureConfig {
                 display_id: display.id,
@@ -123,7 +128,10 @@ impl HostSession {
                 max_fps: self.video.max_fps,
                 show_cursor: true,
             },
-            Box::new(move |frame| {
+            Box::new(move |mut frame| {
+                // Jam capture mulai lagi dari nol tiap pindah monitor, sedangkan
+                // encoder dan decoder butuh timestamp yang terus maju selama sesi.
+                frame.timestamp_us = started.elapsed().as_micros() as u64;
                 slot.put(frame);
             }),
         )
@@ -226,6 +234,7 @@ fn spawn_encoder(
 
 async fn send_frames(
     connection: quinn::Connection,
+    session_id: u32,
     mut frames: mpsc::Receiver<EncodedFrame>,
     stop: Arc<AtomicBool>,
     mut ended: watch::Receiver<()>,
@@ -247,6 +256,7 @@ async fn send_frames(
             _ = ended.changed() => break,
         };
         let header = VideoHeader {
+            session_id,
             sequence,
             timestamp_us: frame.timestamp_us,
             keyframe: frame.keyframe,

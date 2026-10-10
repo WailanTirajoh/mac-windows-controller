@@ -46,6 +46,7 @@ fn main() {
             viewer::viewer_select_display,
             viewer::viewer_request_keyframe,
             viewer::viewer_set_clipboard_sync,
+            viewer::viewer_set_quality,
             selftest::selftest_stream,
             selftest::selftest_report
         ])

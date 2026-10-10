@@ -136,7 +136,7 @@ impl FrameOrder {
     }
 }
 
-async fn read_video_stream(mut stream: quinn::RecvStream) -> anyhow::Result<(u64, EncodedFrame)> {
+async fn read_video_stream(mut stream: quinn::RecvStream) -> anyhow::Result<(VideoHeader, EncodedFrame)> {
     let kind = stream.read_u8().await?;
     anyhow::ensure!(
         StreamKind::from_byte(kind) == Some(StreamKind::Video),
@@ -147,7 +147,7 @@ async fn read_video_stream(mut stream: quinn::RecvStream) -> anyhow::Result<(u64
     let header = VideoHeader::decode(&header);
     let data = stream.read_to_end(MAX_VIDEO_FRAME).await?;
     Ok((
-        header.sequence,
+        header,
         EncodedFrame {
             data,
             keyframe: header.keyframe,
@@ -158,30 +158,46 @@ async fn read_video_stream(mut stream: quinn::RecvStream) -> anyhow::Result<(u64
     ))
 }
 
-/// Menerima stream video dari `connection` dan meneruskan frame berurutan ke
-/// `events`. `control` dipakai untuk meminta keyframe saat ada frame hilang
-/// atau viewer tertinggal.
+/// Menerima stream video sesi `session_id` dari `connection` dan meneruskan
+/// frame berurutan ke `events`. `control` dipakai untuk meminta keyframe saat
+/// ada frame hilang atau viewer tertinggal.
+///
+/// Stream diterima di task ini sendiri, bukan di task terpisah: saat sesi
+/// berakhir task ini dibatalkan, dan penerimaan stream harus ikut berhenti
+/// supaya tidak merebut frame milik sesi berikutnya di koneksi yang sama.
 pub(crate) async fn receive_video(
     connection: quinn::Connection,
+    session_id: u32,
     events: mpsc::Sender<SessionEvent>,
     control: mpsc::UnboundedSender<ControlMessage>,
 ) {
     let (arrived, mut frames) = mpsc::unbounded_channel();
-    let accepting = tokio::spawn(async move {
-        while let Ok(stream) = connection.accept_uni().await {
-            let arrived = arrived.clone();
-            tokio::spawn(async move {
-                if let Ok(frame) = read_video_stream(stream).await {
-                    let _ = arrived.send(frame);
-                }
-            });
-        }
-    });
-
     let mut order = FrameOrder::default();
     let mut last_request: Option<Instant> = None;
-    while let Some((sequence, frame)) = frames.recv().await {
-        for frame in order.push(sequence, frame) {
+
+    loop {
+        let (header, frame) = tokio::select! {
+            stream = connection.accept_uni() => {
+                let Ok(stream) = stream else {
+                    break;
+                };
+                // Tiap frame dibaca task sendiri supaya frame besar tidak menahan yang lain.
+                let arrived = arrived.clone();
+                tokio::spawn(async move {
+                    if let Ok(frame) = read_video_stream(stream).await {
+                        let _ = arrived.send(frame);
+                    }
+                });
+                continue;
+            }
+            Some(frame) = frames.recv() => frame,
+        };
+        // Frame sesi sebelumnya yang masih dalam perjalanan saat sesi ini dimulai.
+        if header.session_id != session_id {
+            continue;
+        }
+
+        for frame in order.push(header.sequence, frame) {
             match events.try_send(SessionEvent::Frame(frame)) {
                 Ok(()) => {}
                 // Viewer tertinggal: buang sisanya dan mulai lagi dari keyframe.
@@ -189,10 +205,7 @@ pub(crate) async fn receive_video(
                     order.resync();
                     break;
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    accepting.abort();
-                    return;
-                }
+                Err(mpsc::error::TrySendError::Closed(_)) => return,
             }
         }
         let may_request = last_request.is_none_or(|at| at.elapsed() >= KEYFRAME_REQUEST_INTERVAL);
@@ -203,7 +216,6 @@ pub(crate) async fn receive_video(
             }
         }
     }
-    accepting.abort();
     let _ = events.send(SessionEvent::Ended).await;
 }
 

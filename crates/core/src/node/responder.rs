@@ -177,7 +177,11 @@ impl Responder {
                 };
                 self.reply(reply).await
             }
-            ControlMessage::SessionStart { display_id, video } => self.on_session_start(display_id, video).await,
+            ControlMessage::SessionStart {
+                session_id,
+                display_id,
+                video,
+            } => self.on_session_start(session_id, display_id, video).await,
             ControlMessage::SelectDisplay { display_id } => self.on_select_display(display_id).await,
             ControlMessage::RequestKeyframe => {
                 if let Some(session) = &self.session {
@@ -236,7 +240,12 @@ impl Responder {
         Ok(())
     }
 
-    async fn on_session_start(&mut self, display_id: Option<u32>, video: VideoParams) -> anyhow::Result<()> {
+    async fn on_session_start(
+        &mut self,
+        session_id: u32,
+        display_id: Option<u32>,
+        video: VideoParams,
+    ) -> anyhow::Result<()> {
         if !self.trusted() {
             return self.reply(ControlMessage::NotPaired).await;
         }
@@ -252,7 +261,7 @@ impl Responder {
         let services = self.inner.services.clone();
         let (copied, copied_texts) = mpsc::unbounded_channel();
         let started = tokio::task::spawn_blocking(move || {
-            HostSession::start(connection, &services, display_id, video, copied)
+            HostSession::start(connection, &services, session_id, display_id, video, copied)
         })
         .await?;
 

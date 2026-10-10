@@ -24,6 +24,7 @@ export class H264Decoder {
   private decoder: VideoDecoder | null = null;
   private configured = "";
   private needsKeyframe = true;
+  private lastTimestampUs = -1;
 
   constructor(
     private readonly onFrame: (frame: VideoFrame) => void,
@@ -42,10 +43,14 @@ export class H264Decoder {
         this.onError("keyframe tanpa SPS");
         return false;
       }
+      // Timestamp yang mundur berarti stream baru (sesi dimulai ulang). Decoder
+      // lama bisa menahan frame seperti itu, jadi dibuat ulang di keyframe ini.
+      if (frame.timestampUs <= this.lastTimestampUs) this.close();
       this.configure(codec, frame.width, frame.height);
       this.needsKeyframe = false;
     }
     if (this.needsKeyframe || this.decoder === null) return false;
+    this.lastTimestampUs = frame.timestampUs;
 
     this.decoder.decode(
       new EncodedVideoChunk({
@@ -70,6 +75,7 @@ export class H264Decoder {
     if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
     this.decoder = null;
     this.needsKeyframe = true;
+    this.lastTimestampUs = -1;
   }
 
   private configure(codec: string, width: number, height: number): void {

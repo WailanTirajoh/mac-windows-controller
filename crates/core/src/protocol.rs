@@ -99,6 +99,9 @@ pub enum InputEvent {
 /// Awal tiap stream video, setelah byte jenis stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoHeader {
+    /// Sesi pemilik frame ini, sama dengan `session_id` di `SessionStart`.
+    /// Frame sesi lama yang terlambat tiba dikenali dari sini.
+    pub session_id: u32,
     /// Nomor urut frame sejak sesi dimulai.
     pub sequence: u64,
     pub timestamp_us: u64,
@@ -108,15 +111,16 @@ pub struct VideoHeader {
 }
 
 impl VideoHeader {
-    pub const BYTES: usize = 25;
+    pub const BYTES: usize = 29;
 
     pub fn encode(&self) -> [u8; Self::BYTES] {
         let mut bytes = [0u8; Self::BYTES];
-        bytes[0..8].copy_from_slice(&self.sequence.to_le_bytes());
-        bytes[8..16].copy_from_slice(&self.timestamp_us.to_le_bytes());
-        bytes[16] = u8::from(self.keyframe);
-        bytes[17..21].copy_from_slice(&self.width.to_le_bytes());
-        bytes[21..25].copy_from_slice(&self.height.to_le_bytes());
+        bytes[0..4].copy_from_slice(&self.session_id.to_le_bytes());
+        bytes[4..12].copy_from_slice(&self.sequence.to_le_bytes());
+        bytes[12..20].copy_from_slice(&self.timestamp_us.to_le_bytes());
+        bytes[20] = u8::from(self.keyframe);
+        bytes[21..25].copy_from_slice(&self.width.to_le_bytes());
+        bytes[25..29].copy_from_slice(&self.height.to_le_bytes());
         bytes
     }
 
@@ -124,11 +128,12 @@ impl VideoHeader {
         let u64_at = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 byte"));
         let u32_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 byte"));
         Self {
-            sequence: u64_at(0),
-            timestamp_us: u64_at(8),
-            keyframe: bytes[16] & 1 != 0,
-            width: u32_at(17),
-            height: u32_at(21),
+            session_id: u32_at(0),
+            sequence: u64_at(4),
+            timestamp_us: u64_at(12),
+            keyframe: bytes[20] & 1 != 0,
+            width: u32_at(21),
+            height: u32_at(25),
         }
     }
 }
@@ -162,6 +167,8 @@ pub enum ControlMessage {
 
     /// Pengendali meminta sesi remote desktop dimulai.
     SessionStart {
+        /// Dipilih pengendali; dicantumkan tujuan di tiap frame video sesi ini.
+        session_id: u32,
         /// Monitor yang diminta; `None` berarti monitor utama.
         display_id: Option<u32>,
         video: VideoParams,
@@ -293,6 +300,7 @@ mod tests {
     #[test]
     fn video_header_round_trips() {
         let header = VideoHeader {
+            session_id: 0xDEAD_BEEF,
             sequence: u64::MAX - 1,
             timestamp_us: 123_456_789,
             keyframe: true,

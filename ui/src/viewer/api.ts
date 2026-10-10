@@ -17,6 +17,8 @@ export interface SessionView {
   inputEnabled: boolean;
 }
 
+export type Quality = "low" | "balanced" | "sharp";
+
 export type MouseButton = "left" | "right" | "middle";
 
 /** Event input untuk perangkat tujuan; posisi dinyatakan 0..1 relatif terhadap layar yang tampil. */
@@ -35,6 +37,8 @@ export const viewerSelectDisplay = (fingerprint: string, displayId: number) =>
 export const viewerRequestKeyframe = (fingerprint: string) => invoke<void>("viewer_request_keyframe", { fingerprint });
 export const viewerSetClipboardSync = (fingerprint: string, enabled: boolean) =>
   invoke<void>("viewer_set_clipboard_sync", { fingerprint, enabled });
+export const viewerSetQuality = (fingerprint: string, quality: Quality) =>
+  invoke<void>("viewer_set_quality", { fingerprint, quality });
 
 export const onDisplayChanged = (handler: (displayId: number) => void): Promise<UnlistenFn> =>
   listen<number>("viewer-display-changed", (event) => handler(event.payload));
