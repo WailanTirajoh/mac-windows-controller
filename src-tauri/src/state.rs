@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::transfers::{self, TransferView};
+use crate::tray;
 use crate::viewer::ViewerHandle;
 
 pub const EVENT_DEVICES_CHANGED: &str = "devices-changed";
@@ -160,7 +161,7 @@ pub fn start(app: &AppHandle) -> anyhow::Result<()> {
 }
 
 /// Membawa jendela utama ke depan, untuk hal yang harus dilihat pengguna.
-fn show_main_window(app: &AppHandle) {
+pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -202,11 +203,13 @@ async fn forward_node_events(app: AppHandle, mut events: UnboundedReceiver<NodeE
                         input_enabled,
                     },
                 );
+                tray::refresh(&app);
                 app.emit(EVENT_CONTROLLERS_CHANGED, ())
             }
             NodeEvent::SessionEnded { peer } => {
                 tracing::info!(id = %peer.device_id(), "sesi masuk berakhir");
                 app.state::<AppState>().controllers.lock().unwrap().remove(&peer);
+                tray::refresh(&app);
                 app.emit(EVENT_CONTROLLERS_CHANGED, ())
             }
             NodeEvent::Transfer(event) => {

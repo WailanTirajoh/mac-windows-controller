@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS 15+ meminta izin jaringan lokal; teks ini tampil di dialognya. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Sambung mencari dan menghubungi perangkat lain di jaringan yang sama.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_sambung._udp</string>
+	</array>
+</dict>
+</plist>
